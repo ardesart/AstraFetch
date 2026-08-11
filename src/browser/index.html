@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+  <title>AstraFetch Browser</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="toolbar">
+    <div class="nav-buttons">
+      <button id="backButton" class="icon-button" title="Назад" aria-label="Назад">←</button>
+      <button id="forwardButton" class="icon-button" title="Вперед" aria-label="Вперед">→</button>
+      <button id="reloadButton" class="icon-button" title="Оновити" aria-label="Оновити">↻</button>
+      <button id="homeButton" class="icon-button" title="Головна" aria-label="Головна">⌂</button>
+    </div>
+    <form id="addressForm" class="address-wrap">
+      <span id="securityIndicator" class="security-indicator">●</span>
+      <input id="addressInput" autocomplete="off" spellcheck="false" placeholder="Адреса або пошуковий запит">
+      <span id="loadingIndicator" class="loading-indicator hidden"></span>
+    </form>
+    <div class="browser-actions">
+      <button id="externalButton" class="button ghost" type="button">У системному браузері</button>
+      <button id="useButton" class="button primary" type="button">Завантажити сторінку</button>
+      <button id="menuButton" class="icon-button" type="button" title="Сесія">⋯</button>
+    </div>
+    <div id="sessionMenu" class="session-menu hidden">
+      <div class="menu-heading">Сесія браузера</div>
+      <div id="cookieStatus" class="menu-status">Перевірка...</div>
+      <p>Це один постійний профіль Chromium для всіх сайтів. Не використовуйте його для банкінгу чи основної пошти.</p>
+      <button id="clearButton" class="button danger" type="button">Вийти з усіх сайтів і очистити дані</button>
+    </div>
+  </header>
+  <script src="browser.js"></script>
+</body>
+</html>
