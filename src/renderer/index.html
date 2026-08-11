@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+  <title>AstraFetch</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48"><path d="M24 5 7 37h11l6-12 6 12h11L24 5Z"/><path d="M15 31h18"/></svg>
+        </div>
+        <div><strong>AstraFetch</strong><span>Universal media workspace</span></div>
+      </div>
+
+      <nav class="nav-list" aria-label="Навігація">
+        <button class="nav-item active" data-page="download"><span class="nav-icon">↓</span><span>Завантаження</span></button>
+        <button class="nav-item" data-page="browser"><span class="nav-icon">◎</span><span>Браузер</span><span id="browserDot" class="nav-dot"></span></button>
+        <button class="nav-item" data-page="queue"><span class="nav-icon">≡</span><span>Черга</span><span id="queueCount" class="nav-count">0</span></button>
+        <button class="nav-item" data-page="history"><span class="nav-icon">↺</span><span>Історія</span></button>
+        <button class="nav-item" data-page="settings"><span class="nav-icon">⚙</span><span>Налаштування</span></button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="privacy-badge"><span>●</span> Локальна обробка</div>
+        <p>Посилання, сесії та файли не надсилаються на сервер AstraFetch.</p>
+        <span id="versionLabel">AstraFetch</span>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <header class="workspace-header">
+        <div>
+          <span id="pageEyebrow" class="eyebrow">MEDIA DOWNLOAD</span>
+          <h1 id="pageTitle">Завантаження</h1>
+        </div>
+        <div class="header-actions">
+          <div id="authHeaderBadge" class="status-pill"><span></span> Без cookies</div>
+          <button id="openBrowserHeader" class="button secondary" type="button">Відкрити браузер</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <section id="page-download" class="page active">
+          <div class="hero-card card">
+            <div class="hero-copy">
+              <span class="eyebrow">PASTE. ANALYZE. SAVE.</span>
+              <h2>Завантажуйте медіа без зайвих кроків</h2>
+              <p>Публічні відео працюють без авторизації. Для приватного контенту використовуйте одну спільну сесію вбудованого Chromium.</p>
+            </div>
+            <div class="url-command">
+              <input id="urlInput" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Вставте посилання YouTube, Reddit, TikTok, Instagram...">
+              <button id="pasteButton" class="button icon-text" type="button">Вставити</button>
+              <button id="analyzeButton" class="button primary" type="button">Аналізувати</button>
+            </div>
+            <div id="messageBox" class="message hidden"></div>
+          </div>
+
+          <div id="previewCard" class="preview-card card hidden">
+            <div class="thumbnail-shell">
+              <img id="thumbnailImage" alt="Прев’ю відео">
+              <span id="durationBadge" class="duration-badge"></span>
+            </div>
+            <div class="preview-copy">
+              <span id="extractorBadge" class="source-badge">VIDEO</span>
+              <h3 id="videoTitle">Назва відео</h3>
+              <p id="videoUploader" class="muted"></p>
+              <div id="metaChips" class="meta-chips"></div>
+            </div>
+          </div>
+
+          <div class="config-grid">
+            <section class="card config-card">
+              <div class="card-heading"><div><span class="step-index">01</span><h3>Формат і місце</h3></div></div>
+              <label class="field">Якість
+                <select id="presetSelect">
+                  <option value="mp4-1080">MP4 1080p — рекомендовано</option>
+                  <option value="best">Максимальна якість</option>
+                  <option value="mp4-2160">MP4 до 4K</option>
+                  <option value="mp4-1440">MP4 до 1440p</option>
+                  <option value="mp4-720">MP4 до 720p</option>
+                  <option value="audio-original">Оригінальне аудіо</option>
+                  <option value="audio-mp3">MP3</option>
+                </select>
+              </label>
+              <label class="field">Папка збереження
+                <div class="path-control"><input id="outputInput" readonly><button id="outputButton" class="button secondary" type="button">Обрати</button></div>
+              </label>
+              <div class="switch-grid">
+                <label class="switch-row"><input id="playlistCheck" type="checkbox"><span class="switch"></span><span><strong>Плейлист</strong><small>Завантажити всі елементи</small></span></label>
+                <label class="switch-row"><input id="metadataCheck" type="checkbox"><span class="switch"></span><span><strong>Метадані й розділи</strong><small>Вбудувати доступну інформацію</small></span></label>
+                <label class="switch-row"><input id="thumbnailCheck" type="checkbox"><span class="switch"></span><span><strong>Прев’ю</strong><small>Зберегти обкладинку поруч</small></span></label>
+                <label class="switch-row"><input id="subtitlesCheck" type="checkbox"><span class="switch"></span><span><strong>Субтитри</strong><small>Завантажити доступні мови</small></span></label>
+              </div>
+              <div id="subtitleOptions" class="sub-options hidden">
+                <label class="field">Мови субтитрів<input id="subtitleLanguagesInput" value="uk,en"></label>
+                <label class="inline-check"><input id="autoSubtitlesCheck" type="checkbox"> Додати автоматичні субтитри</label>
+              </div>
+            </section>
+
+            <section class="card auth-card">
+              <div class="card-heading"><div><span class="step-index">02</span><h3>Авторизація</h3></div><span id="authStatusMini" class="mini-status">Без cookies</span></div>
+              <div class="auth-options">
+                <label class="auth-option active" data-mode="none">
+                  <input type="radio" name="authMode" value="none" checked>
+                  <span class="auth-radio"></span>
+                  <span><strong>Без cookies</strong><small>Стандартний і найбезпечніший режим</small></span>
+                </label>
+                <label class="auth-option" data-mode="browser">
+                  <input type="radio" name="authMode" value="browser">
+                  <span class="auth-radio"></span>
+                  <span><strong>Вбудований браузер</strong><small>Використати активні сесії AstraFetch Browser</small></span>
+                </label>
+                <label class="auth-option" data-mode="file">
+                  <input type="radio" name="authMode" value="file">
+                  <span class="auth-radio"></span>
+                  <span><strong>cookies.txt</strong><small>Резервний ручний варіант</small></span>
+                </label>
+              </div>
+              <div id="browserAuthPanel" class="auth-panel hidden">
+                <div id="browserSessionText" class="session-summary">Сесія ще не перевірена</div>
+                <div class="button-row"><button id="openBrowserButton" class="button primary" type="button">Відкрити браузер</button><button id="refreshBrowserButton" class="button secondary" type="button">Оновити статус</button></div>
+                <p>Увійдіть на потрібні сайти як у звичайному браузері. Тимчасовий cookies-файл створюється автоматично лише на час аналізу або завантаження.</p>
+              </div>
+              <div id="fileAuthPanel" class="auth-panel hidden">
+                <div class="path-control"><input id="cookiesInput" readonly placeholder="cookies.txt не вибрано"><button id="cookiesButton" class="button secondary" type="button">Обрати</button><button id="cookiesClearButton" class="button icon-only" type="button" aria-label="Очистити">×</button></div>
+              </div>
+              <div class="privacy-note"><span>◆</span><p><strong>Cookies не потрапляють у логи.</strong> Тимчасові файли browser-session видаляються після виконання завдання та під час наступного запуску.</p></div>
+            </section>
+          </div>
+
+          <div class="download-bar card">
+            <div><strong>Готово до завантаження</strong><span id="downloadSummary">MP4 1080p · без cookies</span></div>
+            <button id="downloadButton" class="button primary large" type="button">Додати в чергу</button>
+          </div>
+        </section>
+
+        <section id="page-browser" class="page">
+          <div class="browser-hero card">
+            <div class="browser-orbit"><div class="orbit-ring"></div><div class="orbit-core">◎</div></div>
+            <div>
+              <span class="eyebrow">ONE SHARED CHROMIUM SESSION</span>
+              <h2>Один браузер для всіх сайтів</h2>
+              <p>Авторизуйтеся на Reddit, Instagram, Facebook, TikTok, YouTube та інших сервісах. AstraFetch збереже сесії в одному локальному Chromium-профілі й використає їх лише коли ви оберете відповідний режим.</p>
+              <div class="button-row"><button id="browserLaunchButton" class="button primary large" type="button">Запустити AstraFetch Browser</button><button id="browserClearButton" class="button danger-ghost" type="button">Очистити всі сесії</button></div>
+            </div>
+          </div>
+          <div class="browser-stats">
+            <div class="stat-card card"><span>Cookies</span><strong id="browserCookieCount">0</strong><small>у локальній сесії</small></div>
+            <div class="stat-card card"><span>Домени</span><strong id="browserDomainCount">0</strong><small>з активними даними</small></div>
+            <div class="stat-card card"><span>Режим</span><strong id="browserModeLabel">Не вибрано</strong><small>для наступного завантаження</small></div>
+          </div>
+          <div class="card domains-card"><div class="card-heading"><h3>Сайти в сесії</h3><button id="browserStatusRefresh" class="button secondary" type="button">Оновити</button></div><div id="browserDomains" class="domain-list"><span class="empty-inline">Авторизованих доменів поки немає</span></div></div>
+          <div class="notice-card"><strong>Важливо</strong><p>Google може блокувати авторизацію у вбудованому Chromium. Це обмеження Google, а не помилка AstraFetch. У такому випадку використовуйте прямий логін сайту або резервний cookies.txt.</p></div>
+        </section>
+
+        <section id="page-queue" class="page">
+          <div class="section-head"><div><span class="eyebrow">ACTIVE WORK</span><h2>Черга завантажень</h2></div><span id="queuePageCount" class="count-badge">0</span></div>
+          <div id="queueList" class="queue-list"><div class="empty-state">Черга порожня</div></div>
+        </section>
+
+        <section id="page-history" class="page">
+          <div class="section-head"><div><span class="eyebrow">LOCAL ARCHIVE</span><h2>Історія</h2></div></div>
+          <div id="historyList" class="history-list card"><div class="empty-state">Історія порожня</div></div>
+        </section>
+
+        <section id="page-settings" class="page">
+          <div class="settings-grid">
+            <section class="card settings-card"><span class="eyebrow">PERFORMANCE</span><h3>Завантаження</h3><label class="field">Паралельних завантажень<select id="concurrencySelect"><option value="1">1 — стабільно</option><option value="2">2 — рекомендовано</option><option value="3">3 — швидше</option></select></label><p class="muted small">Більше потоків можуть швидше викликати ліміти сайту.</p></section>
+            <section class="card settings-card"><span class="eyebrow">SESSION CONTROL</span><h3>Браузерні дані</h3><p id="settingsBrowserStatus" class="muted">Перевірка...</p><div class="button-row"><button id="settingsOpenBrowser" class="button secondary" type="button">Відкрити браузер</button><button id="settingsClearBrowser" class="button danger-ghost" type="button">Очистити</button></div></section>
+            <section class="card settings-card wide"><div class="card-heading"><div><span class="eyebrow">RUNTIME</span><h3>Компоненти</h3></div><div class="button-row"><button id="binaryRefreshButton" class="button secondary" type="button">Перевірити</button><button id="updateYtDlpButton" class="button primary" type="button">Оновити yt-dlp</button></div></div><div id="binaryStatus" class="binary-grid"><div class="binary-item"><span>yt-dlp</span><strong>Перевірка...</strong></div><div class="binary-item"><span>FFmpeg</span><strong>Перевірка...</strong></div><div class="binary-item"><span>FFprobe</span><strong>Перевірка...</strong></div></div></section>
+            <section class="card settings-card wide"><div class="card-heading"><div><span class="eyebrow">SUPPORT</span><h3>Діагностика</h3></div><button id="copyDiagnosticsButton" class="button secondary" type="button">Копіювати звіт</button></div><pre id="diagnosticsBox">Завантаження...</pre></section>
+          </div>
+        </section>
+      </main>
+    </section>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <template id="jobTemplate">
+    <article class="job card">
+      <div class="job-main">
+        <div class="job-title-row"><div><h3 class="job-title"></h3><p class="job-subtitle muted"></p></div><span class="status-badge"></span></div>
+        <div class="progress-track"><div class="progress-fill"></div></div>
+        <div class="job-stats"><span class="job-progress">0%</span><span class="job-speed"></span><span class="job-eta"></span></div>
+        <div class="job-error hidden"></div>
+      </div>
+      <div class="job-actions"><button class="button secondary open-job hidden" type="button">Відкрити</button><button class="button secondary retry-job hidden" type="button">Повторити</button><button class="button danger-ghost cancel-job" type="button">Скасувати</button></div>
+    </article>
+  </template>
+  <script src="renderer.js"></script>
+</body>
+</html>
