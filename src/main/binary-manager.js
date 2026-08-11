@@ -2,179 +2,138 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const net = require('node:net');
-const dns = require('node:dns').promises;
-const { ipcMain, dialog, shell, clipboard, app } = require('electron');
-const {
-  validateHttpUrl,
-  validateDirectory,
-  validateAuthOptions,
-  validateDownloadOptions,
-  validateJobId
-} = require('./validation');
-const { getBinaryStatus, updateYtDlp } = require('./binary-manager');
+const crypto = require('node:crypto');
+const { pipeline } = require('node:stream/promises');
+const { Readable } = require('node:stream');
+const { ytDlpPath, ffmpegPath, ffprobePath, vendorBin } = require('./paths');
+const { spawnCaptured } = require('./process-utils');
 
-function validateSender(event) {
-  const frameUrl = event.senderFrame?.url || event.sender?.getURL?.() || '';
-  if (!frameUrl.startsWith('file://')) throw new Error('Blocked IPC sender');
-}
+const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
+const YTDLP_SUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
+const USER_AGENT = 'AstraFetch/1.0.2';
 
-function handle(channel, fn) {
-  ipcMain.handle(channel, async (event, ...args) => {
-    validateSender(event);
-    try {
-      return { ok: true, value: await fn(event, ...args) };
-    } catch (error) {
-      return {
-        ok: false,
-        error: {
-          name: error?.name || 'Error',
-          message: String(error?.message || error || 'Unknown error').slice(0, 4000)
-        }
-      };
-    }
+async function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', chunk => hash.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', () => resolve(hash.digest('hex')));
   });
 }
 
-function isPrivateIp(address) {
-  const value = String(address || '').toLowerCase().replace(/^\[|\]$/g, '');
-  if (net.isIP(value) === 4) {
-    const parts = value.split('.').map(Number);
-    if (parts[0] === 10 || parts[0] === 127 || parts[0] === 0) return true;
-    if (parts[0] === 169 && parts[1] === 254) return true;
-    if (parts[0] === 192 && parts[1] === 168) return true;
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-    if (parts[0] >= 224) return true;
-    return false;
-  }
-  if (net.isIP(value) === 6) {
-    return value === '::1' || value === '::' || value.startsWith('fc') || value.startsWith('fd') || /^fe[89ab]/.test(value);
-  }
-  return false;
+async function fetchText(url) {
+  const response = await fetch(url, {
+    redirect: 'follow',
+    headers: { 'User-Agent': USER_AGENT }
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status} while reading update metadata`);
+  return response.text();
 }
 
-async function assertPublicHost(hostname) {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host.endsWith('.local') || isPrivateIp(host)) throw new Error('Private thumbnail host is blocked');
-  const addresses = await dns.lookup(host, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some(item => isPrivateIp(item.address))) throw new Error('Private thumbnail address is blocked');
+function expectedHash(text, fileName) {
+  const escaped = fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(text).match(new RegExp(`^([a-f0-9]{64})\\s+\\*?${escaped}\\s*$`, 'im'));
+  if (!match) throw new Error(`SHA-256 entry was not found for ${fileName}`);
+  return match[1].toLowerCase();
 }
 
-async function fetchThumbnailDataUrl(rawUrl) {
-  if (!rawUrl) return '';
-  let currentUrl = new URL(validateHttpUrl(rawUrl));
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12000);
+async function downloadFile(url, destination) {
+  const response = await fetch(url, {
+    redirect: 'follow',
+    headers: { 'User-Agent': USER_AGENT }
+  });
+  if (!response.ok || !response.body) throw new Error(`HTTP ${response.status} while downloading yt-dlp`);
+  await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(destination, { flags: 'wx' }));
+}
+
+async function readVersion(filePath, args, parser) {
+  if (!fs.existsSync(filePath)) return { exists: false, version: '' };
   try {
-    let response;
-    for (let redirects = 0; redirects <= 4; redirects += 1) {
-      await assertPublicHost(currentUrl.hostname);
-      response = await fetch(currentUrl, {
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: { 'User-Agent': 'AstraFetch/1.0' }
-      });
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get('location');
-        if (!location) throw new Error('Thumbnail redirect is missing a location');
-        currentUrl = new URL(validateHttpUrl(new URL(location, currentUrl).toString()));
-        continue;
-      }
-      break;
-    }
-    if (!response || response.status >= 300 && response.status < 400) throw new Error('Too many thumbnail redirects');
-    if (!response.ok) throw new Error(`Thumbnail HTTP ${response.status}`);
-    const type = (response.headers.get('content-type') || '').split(';')[0].trim();
-    if (!/^image\/(jpeg|png|webp|gif)$/i.test(type)) throw new Error('Unsupported thumbnail type');
-    const declared = Number(response.headers.get('content-length') || 0);
-    if (declared > 8 * 1024 * 1024) throw new Error('Thumbnail is too large');
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > 8 * 1024 * 1024) throw new Error('Thumbnail is too large');
-    return `data:${type};base64,${buffer.toString('base64')}`;
-  } finally {
-    clearTimeout(timeout);
+    const result = await spawnCaptured(filePath, args, { cwd: vendorBin() });
+    if (result.code !== 0) return { exists: true, version: 'unavailable' };
+    const text = `${result.stdout || ''}\n${result.stderr || ''}`.trim();
+    return { exists: true, version: parser(text) || 'unknown' };
+  } catch {
+    return { exists: true, version: 'unavailable' };
   }
 }
 
-function registerIpc({ settings, downloads, browserManager, browserSession }) {
-  handle('app:get-info', async () => ({
-    name: app.getName(),
-    version: app.getVersion(),
-    platform: process.platform,
-    arch: process.arch,
-    electron: process.versions.electron,
-    node: process.versions.node
-  }));
-
-  handle('settings:get', async () => settings.get());
-  handle('settings:set', async (_event, patch) => settings.set(patch || {}));
-
-  handle('dialog:select-output', async (_event, initialPath) => {
-    const defaultPath = typeof initialPath === 'string' ? initialPath : app.getPath('downloads');
-    const result = await dialog.showOpenDialog({
-      title: 'Select download folder',
-      defaultPath,
-      properties: ['openDirectory', 'createDirectory']
-    });
-    return result.canceled ? '' : validateDirectory(result.filePaths[0]);
-  });
-
-  handle('dialog:select-cookies', async () => {
-    const result = await dialog.showOpenDialog({
-      title: 'Select Netscape cookies.txt',
-      properties: ['openFile'],
-      filters: [{ name: 'Cookies text file', extensions: ['txt'] }, { name: 'All files', extensions: ['*'] }]
-    });
-    return result.canceled ? '' : result.filePaths[0];
-  });
-
-  handle('video:analyze', async (_event, rawUrl, rawAuth) => {
-    return downloads.analyze(validateHttpUrl(rawUrl), validateAuthOptions(rawAuth));
-  });
-  handle('thumbnail:fetch', async (_event, rawUrl) => fetchThumbnailDataUrl(rawUrl));
-  handle('download:add', async (_event, rawOptions, metadata) => downloads.add(validateDownloadOptions(rawOptions), metadata));
-  handle('download:list', async () => downloads.list());
-  handle('download:cancel', async (_event, id) => downloads.cancel(validateJobId(id)));
-  handle('download:retry', async (_event, id) => downloads.retry(validateJobId(id)));
-  handle('history:list', async (_event, limit) => downloads.readHistory(Number(limit) || 100));
-
-  handle('browser:open', async (_event, initialUrl) => {
-    browserManager.open(typeof initialUrl === 'string' ? initialUrl : undefined);
-    return true;
-  });
-  handle('browser:navigate', async (_event, value) => { browserManager.navigate(value); return true; });
-  handle('browser:back', async () => { browserManager.back(); return true; });
-  handle('browser:forward', async () => { browserManager.forward(); return true; });
-  handle('browser:reload', async () => { browserManager.reload(); return true; });
-  handle('browser:stop', async () => { browserManager.stop(); return true; });
-  handle('browser:home', async () => { browserManager.home(); return true; });
-  handle('browser:state-get', async () => browserManager.state());
-  handle('browser:use-current', async () => browserManager.useCurrentUrl());
-  handle('browser:open-external', async () => { browserManager.openExternal(); return true; });
-  handle('browser:clear-data', async () => browserManager.clearData());
-  handle('browser:cookie-status', async () => browserSession.status());
-
-  handle('binary:status', async () => getBinaryStatus());
-  handle('binary:update-ytdlp', async () => {
-    if (downloads.hasActiveJobs()) throw new Error('Finish or cancel active downloads before updating yt-dlp.');
-    return updateYtDlp();
-  });
-
-  handle('system:open-path', async (_event, targetPath) => {
-    if (typeof targetPath !== 'string || targetPath.length > 2048) throw new Error('Invalid path');
-    const normalized = path.resolve(targetPath);
-    if (!fs.existsSync(normalized)) throw new Error('Path does not exist');
-    if (fs.statSync(normalized).isFile()) {
-      shell.showItemInFolder(normalized);
-      return '';
-    }
-    return shell.openPath(normalized);
-  });
-  handle('system:read-clipboard', async () => clipboard.readText().slice(0, 4096));
-  handle('system:copy-text', async (_event, text) => {
-    clipboard.writeText(String(text || '').slice(0, 200000));
-    return true;
-  });
+function firstVersionLine(text, toolName) {
+  const first = String(text).split(/\r?\n/).find(Boolean) || '';
+  const pattern = new RegExp(`^${toolName} version\\s+([^\\s]+)`, 'i');
+  return first.match(pattern)?.[1] || first.slice(0, 120);
 }
 
-module.exports = { registerIpc };
+async function getBinaryStatus() {
+  const [ytDlp, ffmpeg, ffprobe] = await Promise.all([
+    readVersion(ytDlpPath(), ['--version'], text => String(text).split(/\r?\n/).find(Boolean)?.trim() || ''),
+    readVersion(ffmpegPath(), ['-version'], text => firstVersionLine(text, 'ffmpeg')),
+    readVersion(ffprobePath(), ['-version'], text => firstVersionLine(text, 'ffprobe'))
+  ]);
+  return { ytDlp, ffmpeg, ffprobe };
+}
+
+async function verifyDownloadedYtDlp(filePath, expected) {
+  const actual = (await sha256File(filePath)).toLowerCase();
+  if (actual !== expected) {
+    throw new Error(`yt-dlp SHA-256 verification failed. Expected ${expected}, got ${actual}`);
+  }
+  const result = await spawnCaptured(filePath, ['--version'], { cwd: vendorBin() });
+  if (result.code !== 0) throw new Error('Downloaded yt-dlp failed its version check');
+  const version = String(result.stdout || result.stderr || '').split(/\r?\n/).find(Boolean)?.trim() || '';
+  if (!version) throw new Error('Downloaded yt-dlp did not report a version');
+  return version;
+}
+
+async function updateYtDlp() {
+  if (process.platform !== 'win32') throw new Error('The built-in yt-dlp updater currently supports Windows only');
+
+  fs.mkdirSync(vendorBin(), { recursive: true });
+  const destination = ytDlpPath();
+  const sums = await fetchText(YTDLP_SUMS_URL);
+  const expected = expectedHash(sums, 'yt-dlp.exe');
+
+  if (fs.existsSync(destination)) {
+    try {
+      const current = (await sha256File(destination)).toLowerCase();
+      if (current === expected) {
+        const status = await getBinaryStatus();
+        return { changed: false, version: status.ytDlp.version };
+      }
+    } catch {
+      // A damaged existing binary is replaced below.
+    }
+  }
+
+  const temp = path.join(vendorBin(), `.yt-dlp-${process.pid}-${Date.now()}.download`);
+  const backup = `${destination}.bak`;
+  fs.rmSync(temp, { force: true });
+  fs.rmSync(backup, { force: true });
+
+  let movedOld = false;
+  try {
+    await downloadFile(YTDLP_URL, temp);
+    const version = await verifyDownloadedYtDlp(temp, expected);
+
+    if (fs.existsSync(destination)) {
+      fs.renameSync(destination, backup);
+      movedOld = true;
+    }
+    fs.renameSync(temp, destination);
+
+    const installed = await verifyDownloadedYtDlp(destination, expected);
+    fs.rmSync(backup, { force: true });
+    return { changed: true, version: installed || version };
+  } catch (error) {
+    fs.rmSync(temp, { force: true });
+    if (movedOld && !fs.existsSync(destination) && fs.existsSync(backup)) {
+      try { fs.renameSync(backup, destination); } catch {}
+    }
+    throw error;
+  } finally {
+    if (fs.existsSync(destination)) fs.rmSync(backup, { force: true });
+  }
+}
+
+module.exports = { getBinaryStatus, updateYtDlp };
