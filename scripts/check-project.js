@@ -26,6 +26,13 @@ if(/artifactory\/api\/npm|registry\.company|npm\.internal/i.test(packageJsonText
 const packageJson=JSON.parse(packageJsonText);
 if(!packageJson.build?.appId||!packageJson.build?.nsis){console.error('electron-builder configuration is incomplete.');failed=true}
 if(packageJson.allowScripts?.['electron@43.1.1']!==true){console.error('Electron install script is not explicitly reviewed in allowScripts.');failed=true}
+if(packageJson.build?.artifactName?.includes('${target}')){console.error('Top-level artifactName must not use the unsupported ${target} macro.');failed=true}
+if(packageJson.build?.nsis?.artifactName!=='${productName}-${version}-installer-${arch}.${ext}'){
+  console.error('Unexpected NSIS artifactName.');failed=true
+}
+if(packageJson.build?.portable?.artifactName!=='${productName}-${version}-portable-${arch}.${ext}'){
+  console.error('Unexpected portable artifactName.');failed=true
+}
 const ensureNodeText=fs.readFileSync(path.join(root,'scripts/ensure-node.ps1'),'utf8');
 if(!ensureNodeText.includes('$NodeVersion = "22.23.1"')){console.error('Unexpected local Node.js bootstrap version.');failed=true}
 const ensureDependenciesText=fs.readFileSync(path.join(root,'scripts/ensure-dependencies.ps1'),'utf8');
