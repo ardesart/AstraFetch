@@ -92,7 +92,7 @@ Expected outputs:
 
 ```text
 dist\AstraFetch-1.0.2-portable-x64.exe
-dist\AstraFetch-1.0.2-nsis-x64.exe
+dist\AstraFetch-1.0.2-installer-x64.exe
 ```
 
 ## Security
