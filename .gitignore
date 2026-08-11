@@ -6,3 +6,4 @@ vendor/bin/*.exe
 vendor/bin/*.download
 *.log
 .DS_Store
+package-lock.json

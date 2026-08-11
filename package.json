@@ -1,6 +1,6 @@
 {
   "name": "astrafetch",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Privacy-first universal media downloader with a built-in Chromium session, powered by yt-dlp and FFmpeg",
   "main": "src/main/main.js",
   "author": "ardesart",
@@ -28,39 +28,12 @@
     "productName": "AstraFetch",
     "artifactName": "${productName}-${version}-${target}-${arch}.${ext}",
     "asar": true,
-    "asarUnpack": [
-      "vendor/bin/**"
-    ],
-    "directories": {
-      "output": "dist",
-      "buildResources": "build"
-    },
-    "files": [
-      "src/**/*",
-      "assets/**/*",
-      "vendor/bin/**/*",
-      "package.json",
-      "LICENSE",
-      "build/icon.ico"
-    ],
-    "extraMetadata": {
-      "main": "src/main/main.js"
-    },
+    "asarUnpack": ["vendor/bin/**"],
+    "directories": {"output": "dist", "buildResources": "build"},
+    "files": ["src/**/*", "assets/**/*", "vendor/bin/**/*", "package.json", "LICENSE", "build/icon.ico"],
+    "extraMetadata": {"main": "src/main/main.js"},
     "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
+      "target": [{"target":"nsis","arch":["x64"]},{"target":"portable","arch":["x64"]}],
       "icon": "build/icon.ico",
       "requestedExecutionLevel": "asInvoker"
     },
@@ -79,16 +52,8 @@
     "publish": null,
     "afterPack": "scripts/after-pack.js"
   },
-  "allowScripts": {
-    "electron@43.1.1": true,
-    "electron-winstaller@5.4.0": true
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/ardesart/AstraFetch.git"
-  },
-  "bugs": {
-    "url": "https://github.com/ardesart/AstraFetch/issues"
-  },
+  "allowScripts": {"electron@43.1.1": true, "electron-winstaller@5.4.0": true},
+  "repository": {"type":"git","url":"https://github.com/ardesart/AstraFetch.git"},
+  "bugs": {"url":"https://github.com/ardesart/AstraFetch/issues"},
   "homepage": "https://github.com/ardesart/AstraFetch#readme"
 }
