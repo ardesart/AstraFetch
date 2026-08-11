@@ -35,7 +35,7 @@ class DownloadManager {
   }
 
   snapshot(job) {
-    const { process: _process, logs: _logs, cookieRef: _cookieRef, ...safe } = job;
+    const { process: _process, logs: _logs, cookieRef: _cookieRef, titleLocked: _titleLocked, ...safe } = job;
     return { ...safe, logs: job.logs.slice(-80) };
   }
 
@@ -66,6 +66,7 @@ class DownloadManager {
     const args = [
       '--ignore-config',
       '--no-restrict-filenames',
+      '--encoding', 'utf-8',
       '--dump-single-json',
       '--no-warnings',
       '--no-color',
@@ -110,6 +111,7 @@ class DownloadManager {
       status: 'queued',
       stage: 'queued',
       title: safeText(metadata?.title || options.url, 500),
+      titleLocked: Boolean(metadata?.title),
       uploader: safeText(metadata?.uploader || '', 300),
       url: options.url,
       outputDirectory: options.outputDirectory,
@@ -187,6 +189,7 @@ class DownloadManager {
     const args = [
       '--ignore-config',
       '--no-restrict-filenames',
+      '--encoding', 'utf-8',
       '--no-color',
       '--newline',
       '--continue',
@@ -241,7 +244,10 @@ class DownloadManager {
       return;
     }
     if (clean.startsWith('TITLE|')) {
-      job.title = safeText(clean.slice(6), 500);
+      const printedTitle = safeText(clean.slice(6), 500).trim();
+      if (!job.titleLocked && printedTitle && !printedTitle.includes('\uFFFD')) {
+        job.title = printedTitle;
+      }
       this.emit(job);
       return;
     }
