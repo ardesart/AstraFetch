@@ -1,0 +1,29 @@
+name: AstraFetch CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.1'
+
+      - name: Project validation
+        run: node scripts/check-project.js
+
+      - name: Unit tests
+        run: node --test tests/*.test.js
