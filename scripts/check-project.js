@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
 const required = [
-  'package.json','src/main/main.js','src/main/ipc.js','src/main/download-manager.js','src/main/browser-manager.js',
+  'package.json','src/main/main.js','src/main/ipc.js','src/main/binary-manager.js','src/main/download-manager.js','src/main/browser-manager.js',
   'src/main/browser-session-manager.js','src/preload/preload.js','src/preload/browser-preload.js','src/browser/index.html',
   'src/browser/browser.js','src/browser/styles.css','src/renderer/index.html','src/renderer/renderer.js','src/renderer/styles.css',
   'scripts/setup-binaries.js','scripts/ensure-node.ps1','scripts/ensure-dependencies.ps1','REPAIR_AND_RUN.bat','RUN.bat',
@@ -32,4 +32,9 @@ const ensureDependenciesText=fs.readFileSync(path.join(root,'scripts/ensure-depe
 for(const token of ['Install-ElectronRuntimeDirect','SHASUMS256.txt','electron-v$version-win32-x64.zip','Clear-ElectronEnvironment']){
   if(!ensureDependenciesText.includes(token)){console.error(`Missing Electron direct-install safeguard: ${token}`);failed=true}
 }
+const binaryManagerText=fs.readFileSync(path.join(root,'src/main/binary-manager.js'),'utf8');
+for(const token of ['async function getBinaryStatus()','async function updateYtDlp()','module.exports = { getBinaryStatus, updateYtDlp }']){
+  if(!binaryManagerText.includes(token)){console.error(`binary-manager.js is missing expected contract: ${token}`);failed=true}
+}
+if(binaryManagerText.includes('function registerIpc(')){console.error('binary-manager.js unexpectedly contains IPC registration code.');failed=true}
 if(failed)process.exit(1);console.log(`Project check passed. Checked ${jsFiles.length} JavaScript files.`);
