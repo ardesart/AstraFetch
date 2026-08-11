@@ -26,7 +26,6 @@
   "build": {
     "appId": "ua.astrafetch.desktop",
     "productName": "AstraFetch",
-    "artifactName": "${productName}-${version}-${target}-${arch}.${ext}",
     "asar": true,
     "asarUnpack": ["vendor/bin/**"],
     "directories": {"output": "dist", "buildResources": "build"},
@@ -38,6 +37,7 @@
       "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
+      "artifactName": "${productName}-${version}-installer-${arch}.${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
@@ -48,6 +48,9 @@
       "runAfterFinish": true,
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
     },
     "publish": null,
     "afterPack": "scripts/after-pack.js"
