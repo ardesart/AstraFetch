@@ -1,30 +1,338 @@
-param([switch]$ForceClean)
-$ErrorActionPreference="Stop"
-$ProgressPreference="SilentlyContinue"
-[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
-$Root=Split-Path -Parent $PSScriptRoot
-$NodeRoot=Join-Path $Root ".runtime\node";$NodeExe=Join-Path $NodeRoot "node.exe";$NpmCmd=Join-Path $NodeRoot "npm.cmd"
-$NodeModules=Join-Path $Root "node_modules";$ElectronRoot=Join-Path $NodeModules "electron";$ElectronDist=Join-Path $ElectronRoot "dist"
-$ElectronPathFile=Join-Path $ElectronRoot "path.txt";$ElectronPackageJson=Join-Path $ElectronRoot "package.json"
-$PackageJson=Join-Path $Root "package.json";$LegacyLock=Join-Path $Root "package-lock.json";$Marker=Join-Path $Root ".cache\dependencies.sha256"
-$NpmRc=Join-Path $Root ".npmrc";$Registry="https://registry.npmjs.org/"
-if(-not(Test-Path -LiteralPath $NodeExe)){throw "Local Node.js is missing. Run ensure-node.ps1 first."}
-if(-not(Test-Path -LiteralPath $NpmCmd)){throw "Local npm is missing. Run ensure-node.ps1 first."}
-if(-not(Test-Path -LiteralPath $PackageJson)){throw "package.json is missing."}
-function Stop-LocalProcesses{try{$prefix=$Root.TrimEnd('\')+'\';Get-CimInstance Win32_Process -ErrorAction SilentlyContinue|Where-Object{$_.ProcessId-ne$PID-and((($_.ExecutablePath)-and$_.ExecutablePath.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase))-or(($_.CommandLine)-and$_.CommandLine.IndexOf($Root,[StringComparison]::OrdinalIgnoreCase)-ge 0-and$_.Name-match'^(node|npm|npx|electron|AstraFetch).*'))}|ForEach-Object{Write-Host "Stopping locked local process $($_.ProcessId)...";Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue}}catch{Write-Warning "Could not inspect local processes: $($_.Exception.Message)"}}
-function Remove-DirectoryRobust([string]$Path){if(-not(Test-Path -LiteralPath $Path)){return};Stop-LocalProcesses;for($i=1;$i-le 4;$i++){try{Get-ChildItem -LiteralPath $Path -Force -Recurse -ErrorAction SilentlyContinue|ForEach-Object{try{$_.Attributes='Normal'}catch{}};Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop;return}catch{Write-Host "Cleanup attempt $i failed. Retrying...";Start-Sleep -Seconds($i*2)}};$empty=Join-Path $Root ".cache\empty-dir";New-Item -ItemType Directory -Force -Path $empty|Out-Null;& robocopy.exe $empty $Path /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP|Out-Null;& cmd.exe /d /c "rmdir /s /q `"$Path`""|Out-Null;if(Test-Path -LiteralPath $Path){throw "Could not remove '$Path'. Close Explorer, terminals, antivirus scans, and retry."}}
-function Clear-ElectronEnvironment{@('ELECTRON_SKIP_BINARY_DOWNLOAD','npm_config_electron_skip_binary_download','NPM_CONFIG_ELECTRON_SKIP_BINARY_DOWNLOAD','ELECTRON_OVERRIDE_DIST_PATH','npm_config_electron_override_dist_path','NPM_CONFIG_ELECTRON_OVERRIDE_DIST_PATH','ELECTRON_CUSTOM_DIR','ELECTRON_CUSTOM_FILENAME','npm_config_electron_custom_dir','npm_config_electron_custom_filename')|ForEach-Object{Remove-Item -LiteralPath "Env:$_" -ErrorAction SilentlyContinue}}
-function Test-NodePackages{foreach($file in @($ElectronPackageJson,(Join-Path $NodeModules "electron-builder\package.json"),(Join-Path $NodeModules "@electron\fuses\package.json"))){if(-not(Test-Path -LiteralPath $file)){return $false}};return $true}
-function Test-ElectronRuntime{$exe=Join-Path $ElectronDist "electron.exe";foreach($file in @($exe,(Join-Path $ElectronDist "resources.pak"),(Join-Path $ElectronDist "icudtl.dat"))){if(-not(Test-Path -LiteralPath $file)){return $false}};try{return(Get-Item -LiteralPath $exe).Length-gt 1000000}catch{return $false}}
-function Download-Retry([string]$Uri,[string]$OutFile,[int]$Attempts=3){for($i=1;$i-le$Attempts;$i++){try{Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue;Write-Host "Downloading $([IO.Path]::GetFileName($OutFile)) (attempt $i of $Attempts)...";Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile -Headers @{'User-Agent'='AstraFetch/1.0.2'};return}catch{if($i-eq$Attempts){throw};Start-Sleep -Seconds($i*2)}}}
-function Install-ElectronRuntimeDirect{if(Test-ElectronRuntime){Write-Host "Electron runtime is ready.";return};if(-not(Test-Path -LiteralPath $ElectronPackageJson)){throw "Electron npm package is missing."};$manifest=Get-Content -LiteralPath $ElectronPackageJson -Raw|ConvertFrom-Json;$version=[string]$manifest.version;if($version-notmatch'^\d+\.\d+\.\d+'){throw "Invalid Electron version."};$temp=Join-Path $Root ".cache\electron-direct";$zipName="electron-v$version-win32-x64.zip";$zip=Join-Path $temp $zipName;$sums=Join-Path $temp "SHASUMS256.txt";Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue;New-Item -ItemType Directory -Force -Path $temp|Out-Null;try{$base="https://github.com/electron/electron/releases/download/v$version";Download-Retry "$base/SHASUMS256.txt" $sums;Download-Retry "$base/$zipName" $zip;$line=Get-Content -LiteralPath $sums|Where-Object{$_-match("\s"+[regex]::Escape($zipName)+"$")}|Select-Object -First 1;if(-not$line){throw "Electron checksum entry was not found in SHASUMS256.txt."};$expected=($line-split'\s+')[0].ToLowerInvariant();$actual=(Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant();if($expected-ne$actual){throw "Electron SHA-256 verification failed."};Remove-DirectoryRobust $ElectronDist;New-Item -ItemType Directory -Force -Path $ElectronDist|Out-Null;Expand-Archive -LiteralPath $zip -DestinationPath $ElectronDist -Force;[IO.File]::WriteAllText($ElectronPathFile,'electron.exe',(New-Object Text.UTF8Encoding($false)));if(-not(Test-ElectronRuntime)){throw "Electron runtime validation failed after extraction."};Write-Host "Electron runtime installed successfully."}finally{Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue}}
+param(
+    [switch]$ForceClean
+)
+
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$Root = Split-Path -Parent $PSScriptRoot
+$NodeRoot = Join-Path $Root ".runtime\node"
+$NodeExe = Join-Path $NodeRoot "node.exe"
+$NpmCmd = Join-Path $NodeRoot "npm.cmd"
+$NodeModules = Join-Path $Root "node_modules"
+$ElectronRoot = Join-Path $NodeModules "electron"
+$ElectronDist = Join-Path $ElectronRoot "dist"
+$ElectronPathFile = Join-Path $ElectronRoot "path.txt"
+$ElectronPackageJson = Join-Path $ElectronRoot "package.json"
+$PackageJson = Join-Path $Root "package.json"
+$LegacyLock = Join-Path $Root "package-lock.json"
+$Marker = Join-Path $Root ".cache\dependencies.sha256"
+$NpmRc = Join-Path $Root ".npmrc"
+$Registry = "https://registry.npmjs.org/"
+$UserAgent = "AstraFetch/1.0.2"
+
+if (-not (Test-Path -LiteralPath $NodeExe)) {
+    throw "Local Node.js is missing. Run ensure-node.ps1 first."
+}
+if (-not (Test-Path -LiteralPath $NpmCmd)) {
+    throw "Local npm is missing. Run ensure-node.ps1 first."
+}
+if (-not (Test-Path -LiteralPath $PackageJson)) {
+    throw "package.json is missing."
+}
+
+function Stop-LocalProcesses {
+    try {
+        $prefix = $Root.TrimEnd('\') + '\'
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.ProcessId -ne $PID -and (
+                    (($_.ExecutablePath) -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) -or
+                    (($_.CommandLine) -and $_.CommandLine.IndexOf($Root, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.Name -match '^(node|npm|npx|electron|AstraFetch).*')
+                )
+            } |
+            ForEach-Object {
+                Write-Host "Stopping locked local process $($_.ProcessId)..."
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+    } catch {
+        Write-Warning "Could not inspect local processes: $($_.Exception.Message)"
+    }
+}
+
+function Remove-DirectoryRobust([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return
+    }
+
+    Stop-LocalProcesses
+
+    for ($i = 1; $i -le 4; $i++) {
+        try {
+            Get-ChildItem -LiteralPath $Path -Force -Recurse -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    try { $_.Attributes = 'Normal' } catch { }
+                }
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            return
+        } catch {
+            Write-Host "Cleanup attempt $i failed. Retrying..."
+            Start-Sleep -Seconds ($i * 2)
+        }
+    }
+
+    $empty = Join-Path $Root ".cache\empty-dir"
+    New-Item -ItemType Directory -Force -Path $empty | Out-Null
+    & robocopy.exe $empty $Path /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    & cmd.exe /d /c "rmdir /s /q `"$Path`"" | Out-Null
+
+    if (Test-Path -LiteralPath $Path) {
+        throw "Could not remove '$Path'. Close Explorer, terminals, antivirus scans, and retry."
+    }
+}
+
+function Clear-ElectronEnvironment {
+    @(
+        'ELECTRON_SKIP_BINARY_DOWNLOAD',
+        'npm_config_electron_skip_binary_download',
+        'NPM_CONFIG_ELECTRON_SKIP_BINARY_DOWNLOAD',
+        'ELECTRON_OVERRIDE_DIST_PATH',
+        'npm_config_electron_override_dist_path',
+        'NPM_CONFIG_ELECTRON_OVERRIDE_DIST_PATH',
+        'ELECTRON_CUSTOM_DIR',
+        'ELECTRON_CUSTOM_FILENAME',
+        'npm_config_electron_custom_dir',
+        'npm_config_electron_custom_filename'
+    ) | ForEach-Object {
+        Remove-Item -LiteralPath "Env:$_" -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-NodePackages {
+    foreach ($file in @(
+        $ElectronPackageJson,
+        (Join-Path $NodeModules "electron-builder\package.json"),
+        (Join-Path $NodeModules "@electron\fuses\package.json")
+    )) {
+        if (-not (Test-Path -LiteralPath $file)) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Test-ElectronRuntime {
+    $exe = Join-Path $ElectronDist "electron.exe"
+    foreach ($file in @(
+        $exe,
+        (Join-Path $ElectronDist "resources.pak"),
+        (Join-Path $ElectronDist "icudtl.dat")
+    )) {
+        if (-not (Test-Path -LiteralPath $file)) {
+            return $false
+        }
+    }
+
+    try {
+        return (Get-Item -LiteralPath $exe).Length -gt 1000000
+    } catch {
+        return $false
+    }
+}
+
+function Download-Retry(
+    [string]$Uri,
+    [string]$OutFile,
+    [int]$Attempts = 3
+) {
+    for ($i = 1; $i -le $Attempts; $i++) {
+        try {
+            Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
+            Write-Host "Downloading $([IO.Path]::GetFileName($OutFile)) (attempt $i of $Attempts)..."
+            Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile -Headers @{'User-Agent' = $UserAgent}
+            return
+        } catch {
+            if ($i -eq $Attempts) {
+                throw
+            }
+            Start-Sleep -Seconds ($i * 2)
+        }
+    }
+}
+
+function Get-HashFromChecksumFile(
+    [string]$ChecksumsPath,
+    [string]$FileName
+) {
+    $escapedName = [regex]::Escape($FileName)
+    $pattern = '^\s*([0-9A-Fa-f]{64})\s+\*?' + $escapedName + '\s*$'
+
+    foreach ($line in Get-Content -LiteralPath $ChecksumsPath) {
+        if ($line -match $pattern) {
+            return $Matches[1].ToLowerInvariant()
+        }
+    }
+
+    return $null
+}
+
+function Get-HashFromGitHubRelease(
+    [string]$Version,
+    [string]$FileName
+) {
+    try {
+        Write-Host "Checksum list entry was not detected. Checking the GitHub release asset digest..."
+        $headers = @{
+            'User-Agent' = $UserAgent
+            'Accept' = 'application/vnd.github+json'
+        }
+        $releaseUrl = "https://api.github.com/repos/electron/electron/releases/tags/v$Version"
+        $release = Invoke-RestMethod -Uri $releaseUrl -Headers $headers
+        $asset = $release.assets | Where-Object { $_.name -eq $FileName } | Select-Object -First 1
+
+        if (-not $asset) {
+            return $null
+        }
+
+        $digest = [string]$asset.digest
+        if ($digest -match '^sha256:([0-9A-Fa-f]{64})$') {
+            return $Matches[1].ToLowerInvariant()
+        }
+    } catch {
+        Write-Warning "Could not read the GitHub release digest: $($_.Exception.Message)"
+    }
+
+    return $null
+}
+
+function Install-ElectronRuntimeDirect {
+    if (Test-ElectronRuntime) {
+        Write-Host "Electron runtime is ready."
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $ElectronPackageJson)) {
+        throw "Electron npm package is missing."
+    }
+
+    $manifest = Get-Content -LiteralPath $ElectronPackageJson -Raw | ConvertFrom-Json
+    $version = [string]$manifest.version
+    if ($version -notmatch '^\d+\.\d+\.\d+') {
+        throw "Invalid Electron version."
+    }
+
+    $temp = Join-Path $Root ".cache\electron-direct"
+    $zipName = "electron-v$version-win32-x64.zip"
+    $zip = Join-Path $temp $zipName
+    $sums = Join-Path $temp "SHASUMS256.txt"
+
+    Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $temp | Out-Null
+
+    try {
+        $base = "https://github.com/electron/electron/releases/download/v$version"
+        Download-Retry "$base/SHASUMS256.txt" $sums
+        Download-Retry "$base/$zipName" $zip
+
+        $expected = Get-HashFromChecksumFile $sums $zipName
+        if (-not $expected) {
+            $expected = Get-HashFromGitHubRelease $version $zipName
+        }
+        if (-not $expected) {
+            throw "Electron SHA-256 checksum could not be obtained from official release metadata."
+        }
+
+        $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
+        if ($expected -ne $actual) {
+            throw "Electron SHA-256 verification failed."
+        }
+
+        Write-Host "Electron SHA-256 verified."
+
+        Remove-DirectoryRobust $ElectronDist
+        New-Item -ItemType Directory -Force -Path $ElectronDist | Out-Null
+        Expand-Archive -LiteralPath $zip -DestinationPath $ElectronDist -Force
+        [IO.File]::WriteAllText($ElectronPathFile, 'electron.exe', (New-Object Text.UTF8Encoding($false)))
+
+        if (-not (Test-ElectronRuntime)) {
+            throw "Electron runtime validation failed after extraction."
+        }
+
+        Write-Host "Electron runtime installed successfully."
+    } finally {
+        Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Clear-ElectronEnvironment
-if(Test-Path -LiteralPath $LegacyLock){Write-Host "Removing legacy package-lock.json to avoid stale transitive dependency pins...";Remove-Item -LiteralPath $LegacyLock -Force}
-$hash=(Get-FileHash -Algorithm SHA256 -LiteralPath $PackageJson).Hash.ToLowerInvariant()
-$env:npm_config_registry=$Registry;$env:NPM_CONFIG_REGISTRY=$Registry;$env:npm_config_userconfig=$NpmRc;$env:NPM_CONFIG_USERCONFIG=$NpmRc;$env:npm_config_cache=Join-Path $Root ".cache\npm";$env:ELECTRON_CACHE=Join-Path $Root ".cache\electron";$env:ELECTRON_BUILDER_CACHE=Join-Path $Root ".cache\electron-builder";$env:ELECTRON_MIRROR=$null;$env:NPM_CONFIG_ELECTRON_MIRROR=$null;$env:electron_mirror=$null;$env:npm_config_proxy=$null;$env:npm_config_https_proxy=$null;$env:NPM_CONFIG_PROXY=$null;$env:NPM_CONFIG_HTTPS_PROXY=$null
-New-Item -ItemType Directory -Force -Path $env:npm_config_cache,$env:ELECTRON_CACHE,$env:ELECTRON_BUILDER_CACHE|Out-Null
-if($ForceClean){Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue;Remove-DirectoryRobust $NodeModules}
-if((Test-Path -LiteralPath $Marker)-and(Test-NodePackages)){$installed=(Get-Content -LiteralPath $Marker -Raw -ErrorAction SilentlyContinue).Trim().ToLowerInvariant();if($installed-eq$hash){Install-ElectronRuntimeDirect;Write-Host "Project dependencies are ready.";exit 0}}
-$ok=$false
-for($i=1;$i-le 3;$i++){Write-Host "Installing project dependencies from $Registry (attempt $i of 3)...";Remove-DirectoryRobust $NodeModules;& $NpmCmd install --package-lock=false --registry=$Registry --userconfig=$NpmRc --no-audit --no-fund --foreground-scripts --fetch-retries=5 --fetch-retry-mintimeout=10000 --fetch-retry-maxtimeout=120000 --fetch-timeout=300000 --prefer-online|Out-Host;$code=if($null-eq$LASTEXITCODE){0}else{[int]$LASTEXITCODE};if($code-eq 0-and(Test-NodePackages)){$ok=$true;break};Write-Warning "npm install attempt $i failed with exit code $code.";if($i-eq 2){& $NpmCmd cache clean --force --cache $env:npm_config_cache|Out-Null};Start-Sleep -Seconds($i*3)}
-if(-not$ok){throw "npm dependency installation failed after 3 attempts."};Install-ElectronRuntimeDirect;Set-Content -LiteralPath $Marker -Value $hash -Encoding Ascii;Write-Host "Project dependencies installed successfully."
+
+if (Test-Path -LiteralPath $LegacyLock) {
+    Write-Host "Removing legacy package-lock.json to avoid stale transitive dependency pins..."
+    Remove-Item -LiteralPath $LegacyLock -Force
+}
+
+$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $PackageJson).Hash.ToLowerInvariant()
+$env:npm_config_registry = $Registry
+$env:NPM_CONFIG_REGISTRY = $Registry
+$env:npm_config_userconfig = $NpmRc
+$env:NPM_CONFIG_USERCONFIG = $NpmRc
+$env:npm_config_cache = Join-Path $Root ".cache\npm"
+$env:ELECTRON_CACHE = Join-Path $Root ".cache\electron"
+$env:ELECTRON_BUILDER_CACHE = Join-Path $Root ".cache\electron-builder"
+$env:ELECTRON_MIRROR = $null
+$env:NPM_CONFIG_ELECTRON_MIRROR = $null
+$env:electron_mirror = $null
+$env:npm_config_proxy = $null
+$env:npm_config_https_proxy = $null
+$env:NPM_CONFIG_PROXY = $null
+$env:NPM_CONFIG_HTTPS_PROXY = $null
+
+New-Item -ItemType Directory -Force -Path @(
+    $env:npm_config_cache,
+    $env:ELECTRON_CACHE,
+    $env:ELECTRON_BUILDER_CACHE
+) | Out-Null
+
+if ($ForceClean) {
+    Remove-Item -LiteralPath $Marker -Force -ErrorAction SilentlyContinue
+    Remove-DirectoryRobust $NodeModules
+}
+
+if ((Test-Path -LiteralPath $Marker) -and (Test-NodePackages)) {
+    $installed = (Get-Content -LiteralPath $Marker -Raw -ErrorAction SilentlyContinue).Trim().ToLowerInvariant()
+    if ($installed -eq $hash) {
+        Install-ElectronRuntimeDirect
+        Write-Host "Project dependencies are ready."
+        exit 0
+    }
+}
+
+$ok = $false
+for ($i = 1; $i -le 3; $i++) {
+    Write-Host "Installing project dependencies from $Registry (attempt $i of 3)..."
+    Remove-DirectoryRobust $NodeModules
+
+    & $NpmCmd install `
+        --package-lock=false `
+        --registry=$Registry `
+        --userconfig=$NpmRc `
+        --no-audit `
+        --no-fund `
+        --foreground-scripts `
+        --fetch-retries=5 `
+        --fetch-retry-mintimeout=10000 `
+        --fetch-retry-maxtimeout=120000 `
+        --fetch-timeout=300000 `
+        --prefer-online | Out-Host
+
+    $code = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+    if ($code -eq 0 -and (Test-NodePackages)) {
+        $ok = $true
+        break
+    }
+
+    Write-Warning "npm install attempt $i failed with exit code $code."
+    if ($i -eq 2) {
+        & $NpmCmd cache clean --force --cache $env:npm_config_cache | Out-Null
+    }
+    Start-Sleep -Seconds ($i * 3)
+}
+
+if (-not $ok) {
+    throw "npm dependency installation failed after 3 attempts."
+}
+
+Install-ElectronRuntimeDirect
+Set-Content -LiteralPath $Marker -Value $hash -Encoding Ascii
+Write-Host "Project dependencies installed successfully."
