@@ -99,17 +99,37 @@ function Clear-ElectronEnvironment {
     }
 }
 
-function Test-NodePackages {
-    foreach ($file in @(
-        $ElectronPackageJson,
-        (Join-Path $NodeModules "electron-builder\package.json"),
-        (Join-Path $NodeModules "@electron\fuses\package.json")
-    )) {
-        if (-not (Test-Path -LiteralPath $file)) {
-            return $false
-        }
+function Get-InstalledPackageVersion([string]$PackagePath) {
+    if (-not (Test-Path -LiteralPath $PackagePath)) {
+        return $null
     }
-    return $true
+    try {
+        $json = Get-Content -LiteralPath $PackagePath -Raw | ConvertFrom-Json
+        return [string]$json.version
+    } catch {
+        return $null
+    }
+}
+
+function Test-NodePackages {
+    try {
+        $manifest = Get-Content -LiteralPath $PackageJson -Raw | ConvertFrom-Json
+        $expectedElectron = [string]$manifest.devDependencies.electron
+        $expectedBuilder = [string]$manifest.devDependencies.'electron-builder'
+        $expectedFuses = [string]$manifest.devDependencies.'@electron/fuses'
+
+        $installedElectron = Get-InstalledPackageVersion $ElectronPackageJson
+        $installedBuilder = Get-InstalledPackageVersion (Join-Path $NodeModules "electron-builder\package.json")
+        $installedFuses = Get-InstalledPackageVersion (Join-Path $NodeModules "@electron\fuses\package.json")
+
+        return (
+            $installedElectron -eq $expectedElectron -and
+            $installedBuilder -eq $expectedBuilder -and
+            $installedFuses -eq $expectedFuses
+        )
+    } catch {
+        return $false
+    }
 }
 
 function Test-ElectronRuntime {
@@ -151,34 +171,19 @@ function Download-Retry(
     }
 }
 
-function Get-HashFromChecksumFile(
-    [string]$ChecksumsPath,
-    [string]$FileName
-) {
-    $escapedName = [regex]::Escape($FileName)
-    $pattern = '^\s*([0-9A-Fa-f]{64})\s+\*?' + $escapedName + '\s*$'
-
-    foreach ($line in Get-Content -LiteralPath $ChecksumsPath) {
-        if ($line -match $pattern) {
-            return $Matches[1].ToLowerInvariant()
-        }
-    }
-
-    return $null
-}
-
 function Get-HashFromGitHubRelease(
     [string]$Version,
     [string]$FileName
 ) {
+    Write-Host "Reading Electron SHA-256 from GitHub release metadata..."
     try {
-        Write-Host "Checksum list entry was not detected. Checking the GitHub release asset digest..."
         $headers = @{
             'User-Agent' = $UserAgent
             'Accept' = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
         }
         $releaseUrl = "https://api.github.com/repos/electron/electron/releases/tags/v$Version"
-        $release = Invoke-RestMethod -Uri $releaseUrl -Headers $headers
+        $release = Invoke-RestMethod -UseBasicParsing -Uri $releaseUrl -Headers $headers
         $asset = $release.assets | Where-Object { $_.name -eq $FileName } | Select-Object -First 1
 
         if (-not $asset) {
@@ -190,10 +195,53 @@ function Get-HashFromGitHubRelease(
             return $Matches[1].ToLowerInvariant()
         }
     } catch {
-        Write-Warning "Could not read the GitHub release digest: $($_.Exception.Message)"
+        Write-Warning "GitHub release metadata lookup failed: $($_.Exception.Message)"
     }
 
     return $null
+}
+
+function Get-HashFromChecksumFile(
+    [string]$ChecksumsPath,
+    [string]$FileName
+) {
+    foreach ($line in Get-Content -LiteralPath $ChecksumsPath) {
+        if ($line -match '^\s*([0-9A-Fa-f]{64})\s+(.+?)\s*$') {
+            $candidate = ([string]$Matches[2]).Trim()
+            if ($candidate.StartsWith('*')) {
+                $candidate = $candidate.Substring(1)
+            }
+            $candidate = $candidate.Replace('/', '\')
+            if ([IO.Path]::GetFileName($candidate) -ieq $FileName) {
+                return $Matches[1].ToLowerInvariant()
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-OfficialElectronHash(
+    [string]$Version,
+    [string]$FileName,
+    [string]$TempDir
+) {
+    $hash = Get-HashFromGitHubRelease $Version $FileName
+    if ($hash) {
+        return $hash
+    }
+
+    Write-Host "GitHub release digest was unavailable. Falling back to SHASUMS256.txt..."
+    $sums = Join-Path $TempDir "SHASUMS256.txt"
+    $base = "https://github.com/electron/electron/releases/download/v$Version"
+    Download-Retry "$base/SHASUMS256.txt" $sums
+
+    $hash = Get-HashFromChecksumFile $sums $FileName
+    if ($hash) {
+        return $hash
+    }
+
+    throw "Electron SHA-256 checksum could not be obtained from official release metadata."
 }
 
 function Install-ElectronRuntimeDirect {
@@ -215,23 +263,14 @@ function Install-ElectronRuntimeDirect {
     $temp = Join-Path $Root ".cache\electron-direct"
     $zipName = "electron-v$version-win32-x64.zip"
     $zip = Join-Path $temp $zipName
-    $sums = Join-Path $temp "SHASUMS256.txt"
 
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $temp | Out-Null
 
     try {
         $base = "https://github.com/electron/electron/releases/download/v$version"
-        Download-Retry "$base/SHASUMS256.txt" $sums
+        $expected = Get-OfficialElectronHash $version $zipName $temp
         Download-Retry "$base/$zipName" $zip
-
-        $expected = Get-HashFromChecksumFile $sums $zipName
-        if (-not $expected) {
-            $expected = Get-HashFromGitHubRelease $version $zipName
-        }
-        if (-not $expected) {
-            throw "Electron SHA-256 checksum could not be obtained from official release metadata."
-        }
 
         $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
         if ($expected -ne $actual) {
@@ -289,10 +328,16 @@ if ($ForceClean) {
     Remove-DirectoryRobust $NodeModules
 }
 
-if ((Test-Path -LiteralPath $Marker) -and (Test-NodePackages)) {
-    $installed = (Get-Content -LiteralPath $Marker -Raw -ErrorAction SilentlyContinue).Trim().ToLowerInvariant()
-    if ($installed -eq $hash) {
+if (Test-NodePackages) {
+    $markerMatches = $false
+    if (Test-Path -LiteralPath $Marker) {
+        $installed = (Get-Content -LiteralPath $Marker -Raw -ErrorAction SilentlyContinue).Trim().ToLowerInvariant()
+        $markerMatches = ($installed -eq $hash)
+    }
+
+    if ($markerMatches -or -not $ForceClean) {
         Install-ElectronRuntimeDirect
+        Set-Content -LiteralPath $Marker -Value $hash -Encoding Ascii
         Write-Host "Project dependencies are ready."
         exit 0
     }
