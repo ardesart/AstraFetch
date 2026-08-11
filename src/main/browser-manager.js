@@ -1,115 +1,265 @@
 'use strict';
 
-const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
-const { pipeline } = require('node:stream/promises');
-const { Readable } = require('node:stream');
-const { ytDlpPath, ffmpegPath, ffprobePath } = require('./paths');
-const { spawnCaptured } = require('./process-utils');
+const { app, BrowserWindow, WebContentsView, shell } = require('electron');
 
-const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
-const YTDLP_SUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
+const TOOLBAR_HEIGHT = 74;
+const HOME_URL = 'https://www.google.com/';
 
-function sha256File(filePath) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash('sha256');
-    const stream = fs.createReadStream(filePath);
-    stream.on('data', chunk => hash.update(chunk));
-    stream.on('error', reject);
-    stream.on('end', () => resolve(hash.digest('hex')));
-  });
-}
-
-async function fetchText(url) {
-  const response = await fetch(url, {
-    redirect: 'follow',
-    headers: { 'User-Agent': 'AstraFetch/1.0' }
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.text();
-}
-
-async function downloadFile(url, destination) {
-  const response = await fetch(url, {
-    redirect: 'follow',
-    headers: { 'User-Agent': 'AstraFetch/1.0' }
-  });
-  if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
-  await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(destination));
-}
-
-function parseExpectedHash(text, fileName) {
-  const lines = String(text).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const line = lines.find(value => value.toLowerCase().endsWith(fileName.toLowerCase()));
-  const match = line?.match(/\b([a-f0-9]{64})\b/i);
-  if (!match) throw new Error('Official yt-dlp checksum was not found');
-  return match[1].toLowerCase();
-}
-
-async function getBinaryStatus() {
-  const status = {
-    ytDlp: { exists: fs.existsSync(ytDlpPath()), version: '', sha256: '' },
-    ffmpeg: { exists: fs.existsSync(ffmpegPath()), version: '' },
-    ffprobe: { exists: fs.existsSync(ffprobePath()), version: '' }
-  };
-
-  if (status.ytDlp.exists) {
-    const result = await spawnCaptured(ytDlpPath(), ['--version']);
-    status.ytDlp.version = result.code === 0 ? result.stdout.trim() : 'error';
-    status.ytDlp.sha256 = await sha256File(ytDlpPath());
-  }
-  if (status.ffmpeg.exists) {
-    const result = await spawnCaptured(ffmpegPath(), ['-version']);
-    status.ffmpeg.version = result.code === 0 ? result.stdout.split(/\r?\n/)[0] : 'error';
-  }
-  if (status.ffprobe.exists) {
-    const result = await spawnCaptured(ffprobePath(), ['-version']);
-    status.ffprobe.version = result.code === 0 ? result.stdout.split(/\r?\n/)[0] : 'error';
-  }
-  return status;
-}
-
-async function updateYtDlp() {
-  const destination = ytDlpPath();
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  const temporary = `${destination}.download.exe`;
-  const backup = `${destination}.backup.exe`;
-  fs.rmSync(temporary, { force: true });
-  fs.rmSync(backup, { force: true });
-
-  const sums = await fetchText(YTDLP_SUMS_URL);
-  const expected = parseExpectedHash(sums, 'yt-dlp.exe');
-  await downloadFile(YTDLP_URL, temporary);
-  const actual = await sha256File(temporary);
-  if (actual !== expected) {
-    fs.rmSync(temporary, { force: true });
-    throw new Error(`yt-dlp SHA-256 mismatch. Expected ${expected}, received ${actual}`);
-  }
-
-  const validation = await spawnCaptured(temporary, ['--version']);
-  if (validation.code !== 0 || !/^\d{4}\.\d{2}\.\d{2}/.test(validation.stdout.trim())) {
-    fs.rmSync(temporary, { force: true });
-    throw new Error('Downloaded yt-dlp executable failed validation');
-  }
-
-  const before = fs.existsSync(destination) ? await sha256File(destination) : '';
+function isHttpUrl(value) {
   try {
-    if (fs.existsSync(destination)) fs.renameSync(destination, backup);
-    fs.renameSync(temporary, destination);
-    fs.rmSync(backup, { force: true });
-  } catch (error) {
-    fs.rmSync(destination, { force: true });
-    if (fs.existsSync(backup)) fs.renameSync(backup, destination);
-    fs.rmSync(temporary, { force: true });
-    throw error;
+    const url = new URL(String(value || ''));
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
   }
-
-  return {
-    changed: before !== actual,
-    version: validation.stdout.trim(),
-    sha256: actual
-  };
 }
 
-module.exports = { getBinaryStatus, updateYtDlp, sha256File };
+function normalizeNavigation(value) {
+  const input = String(value || '').trim();
+  if (!input) return HOME_URL;
+  if (isHttpUrl(input)) return input;
+
+  if (!/\s/.test(input) && (input.includes('.') || input === 'localhost')) {
+    const candidate = `https://${input}`;
+    if (isHttpUrl(candidate)) return candidate;
+  }
+
+  return `https://www.google.com/search?q=${encodeURIComponent(input)}`;
+}
+
+function historyCan(webContents, direction) {
+  const history = webContents?.navigationHistory;
+  if (history) {
+    const fn = direction === 'back' ? history.canGoBack : history.canGoForward;
+    if (typeof fn === 'function') return fn.call(history);
+  }
+  const fallback = direction === 'back' ? webContents?.canGoBack : webContents?.canGoForward;
+  return typeof fallback === 'function' ? fallback.call(webContents) : false;
+}
+
+function historyGo(webContents, direction) {
+  const history = webContents?.navigationHistory;
+  if (history) {
+    const fn = direction === 'back' ? history.goBack : history.goForward;
+    if (typeof fn === 'function') return fn.call(history);
+  }
+  const fallback = direction === 'back' ? webContents?.goBack : webContents?.goForward;
+  if (typeof fallback === 'function') return fallback.call(webContents);
+  return undefined;
+}
+
+class BrowserManager {
+  constructor({ browserSession, onUseUrl }) {
+    if (!browserSession?.session) throw new Error('BrowserManager requires a browser session');
+    this.browserSession = browserSession;
+    this.onUseUrl = typeof onUseUrl === 'function' ? onUseUrl : () => {};
+    this.window = null;
+    this.view = null;
+    this.title = 'AstraFetch Browser';
+  }
+
+  createWindow(initialUrl) {
+    if (this.window && !this.window.isDestroyed()) return;
+
+    const win = new BrowserWindow({
+      width: 1320,
+      height: 860,
+      minWidth: 900,
+      minHeight: 620,
+      show: false,
+      backgroundColor: '#080b12',
+      autoHideMenuBar: true,
+      title: 'AstraFetch Browser',
+      icon: path.join(__dirname, '..', '..', 'build', 'icon.ico'),
+      webPreferences: {
+        preload: path.join(__dirname, '..', 'preload', 'browser-preload.js'),
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        spellcheck: false,
+        devTools: !app.isPackaged || process.env.ASTRAFETCH_DEV === '1'
+      }
+    });
+
+    const view = new WebContentsView({
+      webPreferences: {
+        session: this.browserSession.session,
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
+        webSecurity: true,
+        allowRunningInsecureContent: false,
+        spellcheck: true,
+        devTools: !app.isPackaged || process.env.ASTRAFETCH_DEV === '1'
+      }
+    });
+
+    this.window = win;
+    this.view = view;
+    win.contentView.addChildView(view);
+
+    const layout = () => {
+      if (!this.window || this.window.isDestroyed() || !this.view) return;
+      const bounds = this.window.getContentBounds();
+      this.view.setBounds({
+        x: 0,
+        y: TOOLBAR_HEIGHT,
+        width: Math.max(1, bounds.width),
+        height: Math.max(1, bounds.height - TOOLBAR_HEIGHT)
+      });
+    };
+
+    const remote = view.webContents;
+    const sendState = () => this.sendState();
+
+    remote.setWindowOpenHandler(details => {
+      if (!isHttpUrl(details.url)) return { action: 'deny' };
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          autoHideMenuBar: true,
+          backgroundColor: '#080b12',
+          webPreferences: {
+            session: this.browserSession.session,
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+            webSecurity: true,
+            allowRunningInsecureContent: false,
+            devTools: !app.isPackaged || process.env.ASTRAFETCH_DEV === '1'
+          }
+        }
+      };
+    });
+
+    remote.on('will-navigate', (event, url) => {
+      if (isHttpUrl(url)) return;
+      event.preventDefault();
+      if (/^(mailto:|tel:)/i.test(url)) shell.openExternal(url).catch(() => {});
+    });
+    remote.on('did-start-loading', sendState);
+    remote.on('did-stop-loading', sendState);
+    remote.on('did-navigate', sendState);
+    remote.on('did-navigate-in-page', sendState);
+    remote.on('page-title-updated', (_event, title) => {
+      this.title = String(title || '').slice(0, 300) || 'AstraFetch Browser';
+      sendState();
+    });
+    remote.on('did-fail-load', (_event, errorCode, _errorDescription, validatedURL, isMainFrame) => {
+      if (isMainFrame && errorCode !== -3) sendState();
+    });
+
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    win.webContents.on('will-navigate', event => event.preventDefault());
+    win.on('resize', layout);
+    win.on('maximize', layout);
+    win.on('unmaximize', layout);
+    win.on('enter-full-screen', layout);
+    win.on('leave-full-screen', layout);
+    win.on('closed', () => {
+      this.window = null;
+      this.view = null;
+    });
+
+    win.once('ready-to-show', () => {
+      layout();
+      win.show();
+    });
+
+    win.loadFile(path.join(__dirname, '..', 'browser', 'index.html'));
+    layout();
+    remote.loadURL(normalizeNavigation(initialUrl)).catch(() => {});
+  }
+
+  open(initialUrl) {
+    if (!this.window || this.window.isDestroyed()) {
+      this.createWindow(initialUrl);
+      return;
+    }
+
+    if (this.window.isMinimized()) this.window.restore();
+    this.window.show();
+    this.window.focus();
+    if (typeof initialUrl === 'string' && initialUrl.trim()) this.navigate(initialUrl);
+  }
+
+  navigate(value) {
+    if (!this.view || this.view.webContents.isDestroyed()) {
+      this.open(value);
+      return;
+    }
+    this.view.webContents.loadURL(normalizeNavigation(value)).catch(() => {});
+  }
+
+  back() {
+    const wc = this.view?.webContents;
+    if (wc && !wc.isDestroyed() && historyCan(wc, 'back')) historyGo(wc, 'back');
+  }
+
+  forward() {
+    const wc = this.view?.webContents;
+    if (wc && !wc.isDestroyed() && historyCan(wc, 'forward')) historyGo(wc, 'forward');
+  }
+
+  reload() {
+    const wc = this.view?.webContents;
+    if (wc && !wc.isDestroyed()) wc.reload();
+  }
+
+  stop() {
+    const wc = this.view?.webContents;
+    if (wc && !wc.isDestroyed()) wc.stop();
+  }
+
+  home() {
+    this.navigate(HOME_URL);
+  }
+
+  state() {
+    const wc = this.view?.webContents;
+    if (!wc || wc.isDestroyed()) {
+      return { url: '', title: 'AstraFetch Browser', loading: false, canGoBack: false, canGoForward: false };
+    }
+    return {
+      url: wc.getURL() || '',
+      title: this.title || wc.getTitle() || 'AstraFetch Browser',
+      loading: wc.isLoading(),
+      canGoBack: historyCan(wc, 'back'),
+      canGoForward: historyCan(wc, 'forward')
+    };
+  }
+
+  sendState() {
+    if (!this.window || this.window.isDestroyed()) return;
+    this.window.webContents.send('browser:state', this.state());
+  }
+
+  useCurrentUrl() {
+    const url = this.state().url;
+    if (isHttpUrl(url)) this.onUseUrl(url);
+    return isHttpUrl(url) ? url : '';
+  }
+
+  openExternal() {
+    const url = this.state().url;
+    if (isHttpUrl(url)) return shell.openExternal(url);
+    return Promise.resolve();
+  }
+
+  async clearData() {
+    const status = await this.browserSession.clearAll();
+    this.home();
+    return status;
+  }
+
+  close() {
+    if (this.window && !this.window.isDestroyed()) this.window.close();
+    this.window = null;
+    this.view = null;
+  }
+}
+
+module.exports = { BrowserManager, normalizeNavigation, isHttpUrl, HOME_URL };
