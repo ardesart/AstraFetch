@@ -38,7 +38,7 @@ for(const token of ['async function getBinaryStatus()','async function updateYtD
 }
 if(binaryManagerText.includes('function registerIpc(')){console.error('binary-manager.js unexpectedly contains IPC registration code.');failed=true}
 const browserManagerText=fs.readFileSync(path.join(root,'src/main/browser-manager.js'),'utf8');
-for(const token of ['class BrowserManager','new WebContentsView(','persist:astrafetch-browser','module.exports = { BrowserManager']){
+for(const token of ['class BrowserManager','new WebContentsView(','this.browserSession.session','module.exports = { BrowserManager']){
   if(!browserManagerText.includes(token)){console.error(`browser-manager.js is missing expected contract: ${token}`);failed=true}
 }
 if(browserManagerText.includes('async function updateYtDlp()')||browserManagerText.includes('function registerIpc(')){
