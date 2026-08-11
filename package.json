@@ -1,0 +1,94 @@
+{
+  "name": "astrafetch",
+  "version": "1.0.1",
+  "description": "Privacy-first universal media downloader with a built-in Chromium session, powered by yt-dlp and FFmpeg",
+  "main": "src/main/main.js",
+  "author": "ardesart",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "set ASTRAFETCH_DEV=1&& electron .",
+    "check": "node scripts/check-project.js",
+    "test": "node --test tests/*.test.js",
+    "setup:binaries": "node scripts/setup-binaries.js",
+    "dist:win": "npm run check && electron-builder --win nsis portable --x64",
+    "pack:win": "npm run check && electron-builder --win dir --x64"
+  },
+  "devDependencies": {
+    "electron": "43.1.1",
+    "electron-builder": "26.15.3",
+    "@electron/fuses": "2.1.3"
+  },
+  "build": {
+    "appId": "ua.astrafetch.desktop",
+    "productName": "AstraFetch",
+    "artifactName": "${productName}-${version}-${target}-${arch}.${ext}",
+    "asar": true,
+    "asarUnpack": [
+      "vendor/bin/**"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "vendor/bin/**/*",
+      "package.json",
+      "LICENSE",
+      "build/icon.ico"
+    ],
+    "extraMetadata": {
+      "main": "src/main/main.js"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AstraFetch",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    },
+    "publish": null,
+    "afterPack": "scripts/after-pack.js"
+  },
+  "allowScripts": {
+    "electron@43.1.1": true,
+    "electron-winstaller@5.4.0": true
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ardesart/AstraFetch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ardesart/AstraFetch/issues"
+  },
+  "homepage": "https://github.com/ardesart/AstraFetch#readme"
+}
