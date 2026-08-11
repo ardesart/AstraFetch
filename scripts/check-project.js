@@ -37,4 +37,15 @@ for(const token of ['async function getBinaryStatus()','async function updateYtD
   if(!binaryManagerText.includes(token)){console.error(`binary-manager.js is missing expected contract: ${token}`);failed=true}
 }
 if(binaryManagerText.includes('function registerIpc(')){console.error('binary-manager.js unexpectedly contains IPC registration code.');failed=true}
+const browserManagerText=fs.readFileSync(path.join(root,'src/main/browser-manager.js'),'utf8');
+for(const token of ['class BrowserManager','new WebContentsView(','persist:astrafetch-browser','module.exports = { BrowserManager']){
+  if(!browserManagerText.includes(token)){console.error(`browser-manager.js is missing expected contract: ${token}`);failed=true}
+}
+if(browserManagerText.includes('async function updateYtDlp()')||browserManagerText.includes('function registerIpc(')){
+  console.error('browser-manager.js unexpectedly contains code from another main-process module.');failed=true
+}
+const browserSessionText=fs.readFileSync(path.join(root,'src/main/browser-session-manager.js'),'utf8');
+for(const token of ['class BrowserSessionManager','persist:astrafetch-browser','module.exports = { BrowserSessionManager']){
+  if(!browserSessionText.includes(token)){console.error(`browser-session-manager.js is missing expected contract: ${token}`);failed=true}
+}
 if(failed)process.exit(1);console.log(`Project check passed. Checked ${jsFiles.length} JavaScript files.`);
