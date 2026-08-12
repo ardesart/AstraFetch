@@ -52,8 +52,7 @@
     "portable": {
       "artifactName": "${productName}-${version}-portable-${arch}.${ext}"
     },
-    "publish": null,
-    "afterPack": "scripts/after-pack.js"
+    "publish": null
   },
   "allowScripts": {"electron@43.1.1": true, "electron-winstaller@5.4.0": true},
   "repository": {"type":"git","url":"https://github.com/ardesart/AstraFetch.git"},
