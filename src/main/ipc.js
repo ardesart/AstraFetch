@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
 const dns = require('node:dns').promises;
+const { spawn } = require('node:child_process');
 const { ipcMain, dialog, shell, clipboard, app } = require('electron');
 const {
   validateHttpUrl,
@@ -96,6 +97,32 @@ async function fetchThumbnailDataUrl(rawUrl) {
   }
 }
 
+async function openWindowsPath(targetPath) {
+  const normalized = path.resolve(targetPath);
+  if (!fs.existsSync(normalized)) throw new Error('Path does not exist');
+
+  const stat = fs.statSync(normalized);
+  if (stat.isFile()) {
+    shell.showItemInFolder(normalized);
+    return '';
+  }
+
+  const shellError = await shell.openPath(normalized);
+  if (!shellError) return '';
+
+  if (process.platform === 'win32') {
+    const child = spawn('explorer.exe', [normalized], {
+      detached: true,
+      windowsHide: true,
+      stdio: 'ignore'
+    });
+    child.unref();
+    return '';
+  }
+
+  throw new Error(shellError);
+}
+
 function registerIpc({ settings, downloads, browserManager, browserSession }) {
   handle('app:get-info', async () => ({
     name: app.getName(),
@@ -162,13 +189,7 @@ function registerIpc({ settings, downloads, browserManager, browserSession }) {
 
   handle('system:open-path', async (_event, targetPath) => {
     if (typeof targetPath !== 'string' || targetPath.length > 2048) throw new Error('Invalid path');
-    const normalized = path.resolve(targetPath);
-    if (!fs.existsSync(normalized)) throw new Error('Path does not exist');
-    if (fs.statSync(normalized).isFile()) {
-      shell.showItemInFolder(normalized);
-      return '';
-    }
-    return shell.openPath(normalized);
+    return openWindowsPath(targetPath);
   });
   handle('system:read-clipboard', async () => clipboard.readText().slice(0, 4096));
   handle('system:copy-text', async (_event, text) => {
