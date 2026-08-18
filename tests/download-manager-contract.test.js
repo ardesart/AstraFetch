@@ -26,10 +26,13 @@ test('yt-dlp uses the bundled Deno runtime for JavaScript challenges', () => {
   assert.ok(calls.length >= 2, 'Expected Deno runtime arguments in both analyze and download commands');
 });
 
-test('YouTube requests prefer IPv4 and retry 403 through web_safari HLS', () => {
+test('YouTube retries blocked downloads through no-PO-token client fallbacks', () => {
   assert.match(source, /'--force-ipv4'/);
+  assert.match(source, /youtube:player_client=android_vr/);
+  assert.match(source, /youtube:player_client=web_embedded/);
   assert.match(source, /youtube:player_client=web_safari/);
-  assert.match(source, /isHttp403\(attemptRaw\)/);
-  assert.match(source, /launchAttempt\(true\)/);
+  assert.match(source, /isYouTubeRetryable\(attemptRaw\)/);
+  assert.match(source, /launchAttempt\(nextStrategyIndex\)/);
   assert.match(source, /YOUTUBE_403/);
+  assert.match(source, /YOUTUBE_FORMATS_BLOCKED/);
 });
