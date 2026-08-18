@@ -11,13 +11,13 @@ const { Readable, Transform } = require('node:stream');
 const ROOT = path.resolve(__dirname, '..');
 const BIN_DIR = path.join(ROOT, 'vendor', 'bin');
 const FORCE = process.argv.includes('--force');
+const USER_AGENT = 'AstraFetch-Setup/1.0.5';
 const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
 const YTDLP_SUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
 const FFMPEG_ZIP_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
 const FFMPEG_SUM_URL = `${FFMPEG_ZIP_URL}.sha256`;
 const DENO_ZIP_NAME = 'deno-x86_64-pc-windows-msvc.zip';
-const DENO_ZIP_URL = `https://github.com/denoland/deno/releases/latest/download/${DENO_ZIP_NAME}`;
-const DENO_SUM_URL = `${DENO_ZIP_URL}.sha256sum`;
+const DENO_RELEASE_API = 'https://api.github.com/repos/denoland/deno/releases/latest';
 
 function log(message) {
   process.stdout.write(`[setup] ${message}\n`);
@@ -34,9 +34,25 @@ function sha256File(filePath) {
 }
 
 async function fetchText(url) {
-  const response = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'AstraFetch-Setup/1.0.4' } });
+  const response = await fetch(url, {
+    redirect: 'follow',
+    headers: { 'User-Agent': USER_AGENT }
+  });
   if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
   return response.text();
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url, {
+    redirect: 'follow',
+    headers: {
+      'User-Agent': USER_AGENT,
+      'Accept': 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2026-03-10'
+    }
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
+  return response.json();
 }
 
 async function download(url, destination, label = path.basename(destination)) {
@@ -48,7 +64,7 @@ async function download(url, destination, label = path.basename(destination)) {
     try {
       const response = await fetch(url, {
         redirect: 'follow',
-        headers: { 'User-Agent': 'AstraFetch-Setup/1.0.4' }
+        headers: { 'User-Agent': USER_AGENT }
       });
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status} for ${url}`);
 
@@ -90,12 +106,17 @@ async function download(url, destination, label = path.basename(destination)) {
 }
 
 function expectedHash(text, fileName) {
-  const lines = String(text).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const target = lines.find(line => line.toLowerCase().endsWith(fileName.toLowerCase()));
-  const source = target || lines[0] || '';
-  const match = source.match(/\b([a-f0-9]{64})\b/i);
-  if (!match) throw new Error(`SHA-256 not found for ${fileName}`);
-  return match[1].toLowerCase();
+  const sourceText = String(text);
+  const lines = sourceText.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const target = lines.find(line => line.toLowerCase().includes(fileName.toLowerCase()));
+  const targetMatch = target?.match(/\b([a-f0-9]{64})\b/i);
+  if (targetMatch) return targetMatch[1].toLowerCase();
+
+  const matches = [...sourceText.matchAll(/\b([a-f0-9]{64})\b/ig)].map(match => match[1].toLowerCase());
+  const unique = [...new Set(matches)];
+  if (unique.length === 1) return unique[0];
+  if (!unique.length) throw new Error(`SHA-256 not found for ${fileName}`);
+  throw new Error(`Ambiguous SHA-256 data for ${fileName}`);
 }
 
 async function verify(filePath, expected) {
@@ -185,6 +206,36 @@ async function setupFfmpeg() {
   }
 }
 
+async function resolveDenoRelease() {
+  const release = await fetchJson(DENO_RELEASE_API);
+  const asset = Array.isArray(release.assets)
+    ? release.assets.find(item => item?.name === DENO_ZIP_NAME)
+    : null;
+  if (!asset) throw new Error(`Deno release asset not found: ${DENO_ZIP_NAME}`);
+
+  const url = String(asset.browser_download_url || '');
+  const allowedPrefix = 'https://github.com/denoland/deno/releases/download/';
+  if (!url.startsWith(allowedPrefix)) throw new Error('Unexpected Deno release download URL');
+
+  const digest = String(asset.digest || '');
+  const digestMatch = digest.match(/^sha256:([a-f0-9]{64})$/i);
+  if (digestMatch) {
+    return {
+      url,
+      expected: digestMatch[1].toLowerCase(),
+      version: String(release.tag_name || 'latest')
+    };
+  }
+
+  log('GitHub release digest is unavailable; falling back to the Deno checksum sidecar.');
+  const sumText = await fetchText(`${url}.sha256sum`);
+  return {
+    url,
+    expected: expectedHash(sumText, DENO_ZIP_NAME),
+    version: String(release.tag_name || 'latest')
+  };
+}
+
 async function setupDeno() {
   const destination = path.join(BIN_DIR, 'deno.exe');
   if (!FORCE && fs.existsSync(destination) && fs.statSync(destination).size > 10_000_000) {
@@ -196,11 +247,11 @@ async function setupDeno() {
   const zipPath = path.join(tempRoot, DENO_ZIP_NAME);
   const extractPath = path.join(tempRoot, 'extracted');
   try {
-    log('Downloading Deno JavaScript runtime for yt-dlp...');
-    const sumText = await fetchText(DENO_SUM_URL);
-    const expected = expectedHash(sumText, DENO_ZIP_NAME);
-    await download(DENO_ZIP_URL, zipPath, 'Deno archive');
-    await verify(zipPath, expected);
+    log('Resolving latest Deno release and GitHub SHA-256 digest...');
+    const release = await resolveDenoRelease();
+    log(`Downloading Deno ${release.version} JavaScript runtime for yt-dlp...`);
+    await download(release.url, zipPath, 'Deno archive');
+    await verify(zipPath, release.expected);
     await expandZip(zipPath, extractPath);
 
     const source = findFile(extractPath, 'deno.exe');
