@@ -25,6 +25,26 @@ function jsRuntimeArgs() {
   return fs.existsSync(runtime) ? ['--js-runtimes', `deno:${runtime}`] : [];
 }
 
+function isYouTubeUrl(rawUrl) {
+  try {
+    const host = new URL(rawUrl).hostname.toLowerCase().replace(/^www\./, '');
+    return host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be' || host === 'music.youtube.com';
+  } catch {
+    return false;
+  }
+}
+
+function youtubeNetworkArgs(rawUrl, fallback = false) {
+  if (!isYouTubeUrl(rawUrl)) return [];
+  const args = ['--force-ipv4'];
+  if (fallback) args.push('--extractor-args', 'youtube:player_client=web_safari');
+  return args;
+}
+
+function isHttp403(raw) {
+  return /http(?: error)?\s*403|403:\s*forbidden|403 forbidden/i.test(String(raw || ''));
+}
+
 const { presetArgs, classifyError } = require('./download-logic');
 
 class DownloadManager {
@@ -76,6 +96,7 @@ class DownloadManager {
       '--no-warnings',
       '--no-color',
       ...jsRuntimeArgs(),
+      ...youtubeNetworkArgs(url),
       '--no-playlist',
       '--skip-download',
       '--ffmpeg-location', vendorBin()
@@ -187,7 +208,7 @@ class DownloadManager {
     }
   }
 
-  buildArgs(job, cookiePath = '') {
+  buildArgs(job, cookiePath = '', { youtubeFallback = false } = {}) {
     const o = job.options;
     fs.mkdirSync(o.outputDirectory, { recursive: true });
     fs.mkdirSync(this.archiveRoot, { recursive: true });
@@ -198,6 +219,7 @@ class DownloadManager {
       '--encoding', 'utf-8',
       '--no-color',
       ...jsRuntimeArgs(),
+      ...youtubeNetworkArgs(o.url, youtubeFallback),
       '--newline',
       '--continue',
       '--part',
@@ -296,55 +318,93 @@ class DownloadManager {
     }
     job.cookieRef = cookieRef;
 
-    const child = spawn(ytDlpPath(), this.buildArgs(job, cookieRef.path), {
-      windowsHide: true,
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-    job.process = child;
-    this.running.set(job.id, child);
-
-    const outputLines = readline.createInterface({ input: child.stdout });
-    const errorLines = readline.createInterface({ input: child.stderr });
-    outputLines.on('line', line => this.handleLine(job, line, false));
-    errorLines.on('line', line => this.handleLine(job, line, true));
-
-    let settled = false;
-    child.once('error', error => {
-      if (settled) return;
-      settled = true;
-      this.running.delete(job.id);
+    const finishCookieCleanup = () => {
       this.cleanupCookies(job.cookieRef);
       delete job.cookieRef;
-      this.fail(job, 'PROCESS_ERROR', error.message);
-      this.pump();
-    });
+    };
 
-    child.once('close', code => {
-      if (settled) return;
-      settled = true;
-      this.running.delete(job.id);
-      delete job.process;
-      this.cleanupCookies(job.cookieRef);
-      delete job.cookieRef;
-      if (job.status === 'cancelling') {
-        job.status = 'cancelled';
-        job.stage = 'cancelled';
-        job.completedAt = new Date().toISOString();
+    const launchAttempt = (youtubeFallback = false) => {
+      if (youtubeFallback) {
+        job.status = 'starting';
+        job.stage = 'youtube-hls-fallback';
+        job.progress = 0;
+        job.speed = '';
+        job.eta = '';
+        job.logs.push('INFO YouTube HTTP 403 detected; retrying with IPv4 + web_safari HLS fallback.');
         this.emit(job);
-      } else if (code === 0) {
-        job.status = 'completed';
-        job.stage = 'completed';
-        job.progress = 100;
-        job.completedAt = new Date().toISOString();
-        this.appendHistory(job);
-        this.emit(job);
-      } else {
-        const raw = job.logs.slice(-30).join('\n');
-        this.fail(job, classifyError(raw), raw.split('\n').slice(-8).join('\n') || `yt-dlp exited with code ${code}`);
       }
-      this.pump();
-    });
+
+      const attemptLogStart = job.logs.length;
+      const child = spawn(ytDlpPath(), this.buildArgs(job, cookieRef.path, { youtubeFallback }), {
+        windowsHide: true,
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      job.process = child;
+      this.running.set(job.id, child);
+
+      const outputLines = readline.createInterface({ input: child.stdout });
+      const errorLines = readline.createInterface({ input: child.stderr });
+      outputLines.on('line', line => this.handleLine(job, line, false));
+      errorLines.on('line', line => this.handleLine(job, line, true));
+
+      let settled = false;
+      child.once('error', error => {
+        if (settled) return;
+        settled = true;
+        this.running.delete(job.id);
+        delete job.process;
+        finishCookieCleanup();
+        this.fail(job, 'PROCESS_ERROR', error.message);
+        this.pump();
+      });
+
+      child.once('close', code => {
+        if (settled) return;
+        settled = true;
+        this.running.delete(job.id);
+        delete job.process;
+
+        if (job.status === 'cancelling') {
+          finishCookieCleanup();
+          job.status = 'cancelled';
+          job.stage = 'cancelled';
+          job.completedAt = new Date().toISOString();
+          this.emit(job);
+          this.pump();
+          return;
+        }
+
+        if (code === 0) {
+          finishCookieCleanup();
+          job.status = 'completed';
+          job.stage = 'completed';
+          job.progress = 100;
+          job.completedAt = new Date().toISOString();
+          this.appendHistory(job);
+          this.emit(job);
+          this.pump();
+          return;
+        }
+
+        const attemptRaw = job.logs.slice(attemptLogStart).join('\n');
+        if (!youtubeFallback && isYouTubeUrl(job.url) && isHttp403(attemptRaw)) {
+          launchAttempt(true);
+          return;
+        }
+
+        finishCookieCleanup();
+        const raw = job.logs.slice(-30).join('\n');
+        const codeName = isYouTubeUrl(job.url) && isHttp403(raw) ? 'YOUTUBE_403' : classifyError(raw);
+        const fallbackHint = codeName === 'YOUTUBE_403'
+          ? 'YouTube rejected both the normal request and the HLS fallback. A PO Token provider may be required for this IP/session.\n'
+          : '';
+        this.fail(job, codeName, `${fallbackHint}${raw.split('\n').slice(-8).join('\n') || `yt-dlp exited with code ${code}`}`);
+        this.pump();
+      });
+    };
+
+    launchAttempt(false);
   }
 
   fail(job, code, message) {
