@@ -1,6 +1,6 @@
 {
   "name": "astrafetch",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Privacy-first universal media downloader with a built-in Chromium session, powered by yt-dlp and FFmpeg",
   "main": "src/main/main.js",
   "author": "ardesart",
