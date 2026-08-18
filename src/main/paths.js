@@ -27,11 +27,12 @@ function binaryName(base) {
 function ytDlpPath() { return path.join(vendorBin(), binaryName('yt-dlp')); }
 function ffmpegPath() { return path.join(vendorBin(), binaryName('ffmpeg')); }
 function ffprobePath() { return path.join(vendorBin(), binaryName('ffprobe')); }
+function denoPath() { return path.join(vendorBin(), binaryName('deno')); }
 
 function ensureRuntimeBinaries() {
   if (!app.isPackaged) return;
   fs.mkdirSync(vendorBin(), { recursive: true });
-  for (const name of [binaryName('yt-dlp'), binaryName('ffmpeg'), binaryName('ffprobe')]) {
+  for (const name of [binaryName('yt-dlp'), binaryName('ffmpeg'), binaryName('ffprobe'), binaryName('deno')]) {
     const source = path.join(bundledBin(), name);
     const destination = path.join(vendorBin(), name);
     if (!fs.existsSync(destination) && fs.existsSync(source)) {
@@ -47,5 +48,6 @@ module.exports = {
   ytDlpPath,
   ffmpegPath,
   ffprobePath,
+  denoPath,
   ensureRuntimeBinaries
 };
