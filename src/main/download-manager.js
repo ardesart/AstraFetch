@@ -6,7 +6,7 @@ const readline = require('node:readline');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { app } = require('electron');
-const { ytDlpPath, vendorBin, ffmpegPath } = require('./paths');
+const { ytDlpPath, vendorBin, ffmpegPath, denoPath } = require('./paths');
 const { spawnCaptured, killProcessTree } = require('./process-utils');
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
@@ -18,6 +18,11 @@ function clampProgress(value) {
 
 function safeText(value, max = 500) {
   return String(value ?? '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').slice(0, max);
+}
+
+function jsRuntimeArgs() {
+  const runtime = denoPath();
+  return fs.existsSync(runtime) ? ['--js-runtimes', `deno:${runtime}`] : [];
 }
 
 const { presetArgs, classifyError } = require('./download-logic');
@@ -70,6 +75,7 @@ class DownloadManager {
       '--dump-single-json',
       '--no-warnings',
       '--no-color',
+      ...jsRuntimeArgs(),
       '--no-playlist',
       '--skip-download',
       '--ffmpeg-location', vendorBin()
@@ -191,6 +197,7 @@ class DownloadManager {
       '--no-restrict-filenames',
       '--encoding', 'utf-8',
       '--no-color',
+      ...jsRuntimeArgs(),
       '--newline',
       '--continue',
       '--part',
