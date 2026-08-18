@@ -11,6 +11,13 @@ const { spawnCaptured, killProcessTree } = require('./process-utils');
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
 
+const YOUTUBE_STRATEGIES = [
+  { id: 'default', label: 'default client', extractorArgs: '' },
+  { id: 'android-vr', label: 'android_vr no-PO-token client', extractorArgs: 'youtube:player_client=android_vr' },
+  { id: 'web-embedded', label: 'web_embedded no-PO-token client', extractorArgs: 'youtube:player_client=web_embedded' },
+  { id: 'web-safari', label: 'web_safari HLS client', extractorArgs: 'youtube:player_client=web_safari' }
+];
+
 function clampProgress(value) {
   const n = Number.parseFloat(String(value).replace('%', '').trim());
   return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
@@ -34,15 +41,22 @@ function isYouTubeUrl(rawUrl) {
   }
 }
 
-function youtubeNetworkArgs(rawUrl, fallback = false) {
+function youtubeNetworkArgs(rawUrl, strategyId = 'default') {
   if (!isYouTubeUrl(rawUrl)) return [];
   const args = ['--force-ipv4'];
-  if (fallback) args.push('--extractor-args', 'youtube:player_client=web_safari');
+  const strategy = YOUTUBE_STRATEGIES.find(item => item.id === strategyId) || YOUTUBE_STRATEGIES[0];
+  if (strategy.extractorArgs) args.push('--extractor-args', strategy.extractorArgs);
   return args;
 }
 
 function isHttp403(raw) {
   return /http(?: error)?\s*403|403:\s*forbidden|403 forbidden/i.test(String(raw || ''));
+}
+
+function isYouTubeRetryable(raw) {
+  const text = String(raw || '');
+  return isHttp403(text)
+    || /requested format is not available|requested format.*not available|only images are available|no video formats found/i.test(text);
 }
 
 const { presetArgs, classifyError } = require('./download-logic');
@@ -208,7 +222,7 @@ class DownloadManager {
     }
   }
 
-  buildArgs(job, cookiePath = '', { youtubeFallback = false } = {}) {
+  buildArgs(job, cookiePath = '', { youtubeStrategy = 'default' } = {}) {
     const o = job.options;
     fs.mkdirSync(o.outputDirectory, { recursive: true });
     fs.mkdirSync(this.archiveRoot, { recursive: true });
@@ -219,7 +233,7 @@ class DownloadManager {
       '--encoding', 'utf-8',
       '--no-color',
       ...jsRuntimeArgs(),
-      ...youtubeNetworkArgs(o.url, youtubeFallback),
+      ...youtubeNetworkArgs(o.url, youtubeStrategy),
       '--newline',
       '--continue',
       '--part',
@@ -323,19 +337,23 @@ class DownloadManager {
       delete job.cookieRef;
     };
 
-    const launchAttempt = (youtubeFallback = false) => {
-      if (youtubeFallback) {
+    const strategies = isYouTubeUrl(job.url) ? YOUTUBE_STRATEGIES : [YOUTUBE_STRATEGIES[0]];
+
+    const launchAttempt = strategyIndex => {
+      const strategy = strategies[strategyIndex];
+
+      if (strategyIndex > 0) {
         job.status = 'starting';
-        job.stage = 'youtube-hls-fallback';
+        job.stage = `youtube-fallback-${strategy.id}`;
         job.progress = 0;
         job.speed = '';
         job.eta = '';
-        job.logs.push('INFO YouTube HTTP 403 detected; retrying with IPv4 + web_safari HLS fallback.');
+        job.logs.push(`INFO YouTube fallback ${strategyIndex}/${strategies.length - 1}: retrying with ${strategy.label}.`);
         this.emit(job);
       }
 
       const attemptLogStart = job.logs.length;
-      const child = spawn(ytDlpPath(), this.buildArgs(job, cookieRef.path, { youtubeFallback }), {
+      const child = spawn(ytDlpPath(), this.buildArgs(job, cookieRef.path, { youtubeStrategy: strategy.id }), {
         windowsHide: true,
         shell: false,
         stdio: ['ignore', 'pipe', 'pipe']
@@ -388,23 +406,28 @@ class DownloadManager {
         }
 
         const attemptRaw = job.logs.slice(attemptLogStart).join('\n');
-        if (!youtubeFallback && isYouTubeUrl(job.url) && isHttp403(attemptRaw)) {
-          launchAttempt(true);
+        const nextStrategyIndex = strategyIndex + 1;
+        if (isYouTubeUrl(job.url) && isYouTubeRetryable(attemptRaw) && nextStrategyIndex < strategies.length) {
+          launchAttempt(nextStrategyIndex);
           return;
         }
 
         finishCookieCleanup();
         const raw = job.logs.slice(-30).join('\n');
-        const codeName = isYouTubeUrl(job.url) && isHttp403(raw) ? 'YOUTUBE_403' : classifyError(raw);
-        const fallbackHint = codeName === 'YOUTUBE_403'
-          ? 'YouTube rejected both the normal request and the HLS fallback. A PO Token provider may be required for this IP/session.\n'
+        const allRaw = job.logs.join('\n');
+        const exhaustedYouTubeFallbacks = isYouTubeUrl(job.url) && strategyIndex === strategies.length - 1;
+        const codeName = exhaustedYouTubeFallbacks
+          ? (isHttp403(allRaw) ? 'YOUTUBE_403' : 'YOUTUBE_FORMATS_BLOCKED')
+          : classifyError(raw);
+        const fallbackHint = exhaustedYouTubeFallbacks
+          ? 'YouTube rejected all built-in no-PO-token fallback clients. A PO Token provider is the next required fallback.\n'
           : '';
         this.fail(job, codeName, `${fallbackHint}${raw.split('\n').slice(-8).join('\n') || `yt-dlp exited with code ${code}`}`);
         this.pump();
       });
     };
 
-    launchAttempt(false);
+    launchAttempt(0);
   }
 
   fail(job, code, message) {
