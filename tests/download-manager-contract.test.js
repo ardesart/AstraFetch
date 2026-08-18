@@ -17,3 +17,11 @@ test('analyzed Unicode title is locked against progress-stream replacement', () 
   assert.match(source, /!job\.titleLocked\s*&&\s*printedTitle/);
   assert.match(source, /!printedTitle\.includes\('\\uFFFD'\)/);
 });
+
+test('yt-dlp uses the bundled Deno runtime for JavaScript challenges', () => {
+  assert.match(source, /denoPath/);
+  assert.match(source, /'--js-runtimes'/);
+  assert.match(source, /`deno:\$\{runtime\}`/);
+  const calls = source.match(/\.\.\.jsRuntimeArgs\(\)/g) || [];
+  assert.ok(calls.length >= 2, 'Expected Deno runtime arguments in both analyze and download commands');
+});
