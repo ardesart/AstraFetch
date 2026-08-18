@@ -15,6 +15,9 @@ const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-
 const YTDLP_SUMS_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS';
 const FFMPEG_ZIP_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
 const FFMPEG_SUM_URL = `${FFMPEG_ZIP_URL}.sha256`;
+const DENO_ZIP_NAME = 'deno-x86_64-pc-windows-msvc.zip';
+const DENO_ZIP_URL = `https://github.com/denoland/deno/releases/latest/download/${DENO_ZIP_NAME}`;
+const DENO_SUM_URL = `${DENO_ZIP_URL}.sha256sum`;
 
 function log(message) {
   process.stdout.write(`[setup] ${message}\n`);
@@ -31,7 +34,7 @@ function sha256File(filePath) {
 }
 
 async function fetchText(url) {
-  const response = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'AstraFetch-Setup/1.0' } });
+  const response = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'AstraFetch-Setup/1.0.4' } });
   if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
   return response.text();
 }
@@ -45,7 +48,7 @@ async function download(url, destination, label = path.basename(destination)) {
     try {
       const response = await fetch(url, {
         redirect: 'follow',
-        headers: { 'User-Agent': 'AstraFetch-Setup/1.0.1' }
+        headers: { 'User-Agent': 'AstraFetch-Setup/1.0.4' }
       });
       if (!response.ok || !response.body) throw new Error(`HTTP ${response.status} for ${url}`);
 
@@ -125,6 +128,20 @@ function findFile(root, fileName) {
   return '';
 }
 
+async function expandZip(zipPath, extractPath) {
+  fs.mkdirSync(extractPath, { recursive: true });
+  if (process.platform === 'win32') {
+    const escapedZip = zipPath.replace(/'/g, "''");
+    const escapedOut = extractPath.replace(/'/g, "''");
+    await run('powershell.exe', [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-Command', `Expand-Archive -LiteralPath '${escapedZip}' -DestinationPath '${escapedOut}' -Force`
+    ]);
+    return;
+  }
+  await run('unzip', ['-q', zipPath, '-d', extractPath]);
+}
+
 async function setupYtDlp() {
   const destination = path.join(BIN_DIR, 'yt-dlp.exe');
   if (!FORCE && fs.existsSync(destination) && fs.statSync(destination).size > 5_000_000) {
@@ -156,24 +173,41 @@ async function setupFfmpeg() {
     await download(FFMPEG_ZIP_URL, zipPath, 'FFmpeg archive');
     await verify(zipPath, expected);
 
-    fs.mkdirSync(extractPath, { recursive: true });
-    if (process.platform === 'win32') {
-      const escapedZip = zipPath.replace(/'/g, "''");
-      const escapedOut = extractPath.replace(/'/g, "''");
-      await run('powershell.exe', [
-        '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-Command', `Expand-Archive -LiteralPath '${escapedZip}' -DestinationPath '${escapedOut}' -Force`
-      ]);
-    } else {
-      await run('unzip', ['-q', zipPath, '-d', extractPath]);
-    }
-
+    await expandZip(zipPath, extractPath);
     const ffmpegSource = findFile(extractPath, 'ffmpeg.exe');
     const ffprobeSource = findFile(extractPath, 'ffprobe.exe');
     if (!ffmpegSource || !ffprobeSource) throw new Error('FFmpeg executables were not found in the archive');
     fs.copyFileSync(ffmpegSource, ffmpegDestination);
     fs.copyFileSync(ffprobeSource, ffprobeDestination);
     log('FFmpeg and FFprobe installed.');
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function setupDeno() {
+  const destination = path.join(BIN_DIR, 'deno.exe');
+  if (!FORCE && fs.existsSync(destination) && fs.statSync(destination).size > 10_000_000) {
+    log('Deno already exists.');
+    return;
+  }
+
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'astrafetch-deno-'));
+  const zipPath = path.join(tempRoot, DENO_ZIP_NAME);
+  const extractPath = path.join(tempRoot, 'extracted');
+  try {
+    log('Downloading Deno JavaScript runtime for yt-dlp...');
+    const sumText = await fetchText(DENO_SUM_URL);
+    const expected = expectedHash(sumText, DENO_ZIP_NAME);
+    await download(DENO_ZIP_URL, zipPath, 'Deno archive');
+    await verify(zipPath, expected);
+    await expandZip(zipPath, extractPath);
+
+    const source = findFile(extractPath, 'deno.exe');
+    if (!source) throw new Error('deno.exe was not found in the Deno archive');
+    fs.copyFileSync(source, destination);
+    await run(destination, ['--version']);
+    log('Deno installed.');
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -187,6 +221,7 @@ async function main() {
   fs.mkdirSync(BIN_DIR, { recursive: true });
   await setupYtDlp();
   await setupFfmpeg();
+  await setupDeno();
   log('Binary setup completed successfully.');
 }
 
